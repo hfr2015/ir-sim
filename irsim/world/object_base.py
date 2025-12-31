@@ -1437,6 +1437,33 @@ class ObjectBase:
 
             if "text_zorder" in kwargs:
                 text.set_zorder(kwargs["text_zorder"])
+                
+        goal_x = self.goal[0, 0]
+        goal_y = self.goal[1, 0]
+        # Update goal text position using set_position (works for both 2D and 3D)
+        if hasattr(self, "goal_abbr_text"):
+            goal_text = self.goal_abbr_text
+            # Prefer runtime kwargs, then initial plot kwargs, fallback to default
+            default_text_pos = [-self.radius - 0.1, self.radius + 0.1]
+            text_position = kwargs.get(
+                "text_position",
+                self.plot_kwargs.get("text_position", default_text_pos),
+            )
+
+            goal_text.set_position((goal_x + text_position[0], goal_y + text_position[1]))
+
+            # Update text properties
+            if "text_color" in kwargs:
+                goal_text.set_color(kwargs["text_color"])
+
+            if "text_size" in kwargs:
+                goal_text.set_fontsize(kwargs["text_size"])
+
+            if "text_alpha" in kwargs:
+                goal_text.set_alpha(kwargs["text_alpha"])
+
+            if "text_zorder" in kwargs:
+                goal_text.set_zorder(kwargs["text_zorder"])
 
         # Update goal text position using set_position (works for both 2D and 3D)
         if self.goal is not None:
@@ -1724,7 +1751,7 @@ class ObjectBase:
         text_alpha = kwargs.get("text_alpha", 1)
 
         x, y = state[0, 0], state[1, 0]
-
+            
         if isinstance(ax, Axes3D):
             self.abbr_text = ax.text(
                 x + text_position[0],
@@ -1747,6 +1774,33 @@ class ObjectBase:
                 alpha=text_alpha,
             )
         self.plot_text_list.append(self.abbr_text)
+        
+        if self.show_goal and self.show_goal_text:
+            goal_x, goal_y = self.goal[0, 0], self.goal[1, 0]
+            if isinstance(ax, Axes3D):
+                self.goal_abbr_text = ax.text(
+                    goal_x + text_position[0],
+                    goal_y + text_position[1],
+                    self.z,
+                    self.goal_abbr,
+                    fontsize=text_size,
+                    color=text_color,
+                    zorder=text_zorder,
+                    alpha=text_alpha,
+                )
+            else:
+                self.goal_abbr_text = ax.text(
+                    goal_x + text_position[0],
+                    goal_y + text_position[1],
+                    self.goal_abbr,
+                    fontsize=text_size,
+                    color=text_color,
+                    zorder=text_zorder,
+                    alpha=text_alpha,
+                )
+            self.plot_text_list.append(self.goal_abbr_text)
+
+        
 
         if self.show_goal and self.show_goal_text:
             goal_x, goal_y = self.goal[0, 0], self.goal[1, 0]
@@ -2120,8 +2174,8 @@ class ObjectBase:
             str: The abbreviation of the object.
         """
 
-        return self.role[0] + str(self.id)
-
+        return "G" + str(self.group) +"-"+ self.role[0] + str(self.id)
+    
     @property
     def goal_abbr(self) -> str:
         """

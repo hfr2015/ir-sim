@@ -1082,6 +1082,12 @@ class EnvBase:
         """
 
         self._env_plot.title = title
+    
+    def set_window_name(self, window_name: str) -> None:
+        """
+        Set the window name of the plot.
+        """
+        self._env_plot.fig.canvas.manager.set_window_title(window_name)
 
     def set_random_seed(self, seed: Optional[int] = None) -> None:
         """

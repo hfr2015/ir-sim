@@ -39,6 +39,7 @@ def differential_kinematics(
     assert state.shape[0] >= 3
     assert velocity.shape[0] >= 2
 
+    # Add noise to the velocity if required
     if noise:
         assert len(alpha) >= 4
         std_linear = np.sqrt(
@@ -53,9 +54,24 @@ def differential_kinematics(
     else:
         real_velocity = velocity
 
-    phi = state[2, 0]
-    co_matrix = np.array([[cos(phi), 0], [sin(phi), 0], [0, 1]])
-    next_state = state[0:3] + co_matrix @ real_velocity * step_time
+    phi = WrapToPi(state[2, 0]) # current heading angle, warp to [-pi, pi] (maybe not necessary)
+    
+    vt = float(real_velocity[0, 0]) # linear velocity
+    omega = float(real_velocity[1, 0]) # angular velocity
+    
+    if abs(omega) >= 0.01:
+        # model the diff model as 
+        ratio = vt/omega
+        next_state = state[0:3] + np.array([
+            [-ratio * sin(phi) + ratio * sin(phi + omega * step_time)], 
+            [ratio * cos(phi) - ratio * cos(phi + omega * step_time)], 
+            [omega * step_time]])
+    else:
+        next_state = state[0:3] + np.array([[vt * step_time * cos(phi)], [vt * step_time * sin(phi)], [0]])
+
+
+    # co_matrix = np.array([[cos(phi), 0], [sin(phi), 0], [0, 1]])
+    # next_state = state[0:3] + co_matrix @ real_velocity * step_time
     next_state[2, 0] = WrapToPi(next_state[2, 0])
 
     return next_state

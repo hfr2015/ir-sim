@@ -361,6 +361,7 @@ def vertices_transform(vertices: np.ndarray, state: np.ndarray) -> Optional[np.n
 def omni_to_diff(
     state_ori: float,
     vel_omni: np.ndarray,
+    v_max: float = 1.5,
     w_max: float = 1.5,
     guarantee_time: float = 0.2,
     tolerance: float = 0.1,
@@ -385,8 +386,13 @@ def omni_to_diff(
 
     speed = np.sqrt(vel_omni[0, 0] ** 2 + vel_omni[1, 0] ** 2)
 
+    # TODO： 这里可能不对吧，因为可能是纯旋转啊
     if speed <= mini_speed:
         return np.zeros((2, 1))
+    
+    #  设置速度限制
+    if speed > v_max:
+        speed = v_max
 
     vel_radians = atan2(vel_omni[1, 0], vel_omni[0, 0])
     robot_radians = state_ori
