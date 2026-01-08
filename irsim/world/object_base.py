@@ -2542,12 +2542,19 @@ class ObjectBase:
         Returns:
             list: State [x, y, vx, vy, radius].
         """
+        # return [
+        #     self.state[0, 0],
+        #     self.state[1, 0],
+        #     self.velocity_xy[0, 0],
+        #     self.velocity_xy[1, 0],
+        #     self.radius_extend,
+        # ]
         return [
             self.state[0, 0],
             self.state[1, 0],
             self.velocity_xy[0, 0],
             self.velocity_xy[1, 0],
-            self.radius_extend,
+            self.radius,
         ]
 
     @property

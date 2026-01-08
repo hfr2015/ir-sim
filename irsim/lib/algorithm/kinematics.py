@@ -54,24 +54,31 @@ def differential_kinematics(
     else:
         real_velocity = velocity
 
-    phi = WrapToPi(state[2, 0]) # current heading angle, warp to [-pi, pi] (maybe not necessary)
-    
-    vt = float(real_velocity[0, 0]) # linear velocity
-    omega = float(real_velocity[1, 0]) # angular velocity
-    
+    phi = WrapToPi(state[2, 0])
+
+    vt = float(real_velocity[0, 0])
+    omega = float(real_velocity[1, 0])
+
     if abs(omega) >= 0.01:
-        # model the diff model as 
-        ratio = vt/omega
-        next_state = state[0:3] + np.array([
-            [-ratio * sin(phi) + ratio * sin(phi + omega * step_time)], 
-            [ratio * cos(phi) - ratio * cos(phi + omega * step_time)], 
-            [omega * step_time]])
+        ratio = vt / omega
+        delta = np.array(
+            [
+                [-ratio * sin(phi) + ratio * sin(phi + omega * step_time)],
+                [ratio * cos(phi) - ratio * cos(phi + omega * step_time)],
+                [omega * step_time],
+            ]
+        )
     else:
-        next_state = state[0:3] + np.array([[vt * step_time * cos(phi)], [vt * step_time * sin(phi)], [0]])
+        delta = np.array(
+            [
+                [vt * step_time * cos(phi)],
+                [vt * step_time * sin(phi)],
+                [0],
+            ]
+        )
 
-
-    # co_matrix = np.array([[cos(phi), 0], [sin(phi), 0], [0, 1]])
-    # next_state = state[0:3] + co_matrix @ real_velocity * step_time
+    next_state = state.copy()
+    next_state[0:3] = state[0:3] + delta
     next_state[2, 0] = WrapToPi(next_state[2, 0])
 
     return next_state
