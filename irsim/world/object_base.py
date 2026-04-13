@@ -2832,3 +2832,7 @@ class ObjectBase:
             float: The orientation angle of the object in radians.
         """
         return self.state[2, 0]
+    
+    @property
+    def omni_state(self):
+        return self.rvo_state
