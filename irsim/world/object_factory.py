@@ -1,22 +1,25 @@
-from typing import Any, Optional, Union
+from typing import Any
 
 import numpy as np
 
+from irsim.lib.handler.kinematics_handler import KinematicsFactory
 from irsim.util.random import rng
 from irsim.util.util import (
     convert_list_length,
     convert_list_length_dict,
 )
 from irsim.world.map.obstacle_map import ObstacleMap
-from irsim.world.obstacles.obstacle_acker import ObstacleAcker
-from irsim.world.obstacles.obstacle_diff import ObstacleDiff
-from irsim.world.obstacles.obstacle_omni import ObstacleOmni
-from irsim.world.obstacles.obstacle_static import ObjectStatic
-from irsim.world.robots.robot_acker import RobotAcker
-from irsim.world.robots.robot_diff import RobotDiff
-from irsim.world.robots.robot_omni import RobotOmni
+from irsim.world.object_base import ObjectBase
 
-# from irsim.world.robots.robot_rigid3d import RobotRigid3D
+# Keep backward-compatible imports so existing code can still reach these
+# via ``from irsim.world.object_factory import RobotDiff`` etc.
+from irsim.world.obstacles.obstacle_acker import ObstacleAcker  # noqa: F401
+from irsim.world.obstacles.obstacle_diff import ObstacleDiff  # noqa: F401
+from irsim.world.obstacles.obstacle_omni import ObstacleOmni  # noqa: F401
+from irsim.world.obstacles.obstacle_static import ObjectStatic
+from irsim.world.robots.robot_acker import RobotAcker  # noqa: F401
+from irsim.world.robots.robot_diff import RobotDiff  # noqa: F401
+from irsim.world.robots.robot_omni import RobotOmni  # noqa: F401
 
 
 class ObjectFactory:
@@ -26,7 +29,7 @@ class ObjectFactory:
 
     def create_from_parse(
         self,
-        parse: Union[list[dict[str, Any]], dict[str, Any]],
+        parse: list[dict[str, Any]] | dict[str, Any],
         obj_type: str = "robot",
         group_start_index: int = 0,
     ) -> list[Any]:
@@ -57,13 +60,27 @@ class ObjectFactory:
 
         return object_list
 
-    def create_from_map(self, points: np.ndarray, reso: float = 0.1) -> list[Any]:
+    def create_from_map(
+        self,
+        points: np.ndarray,
+        reso: float = 0.1,
+        grid_map: np.ndarray | None = None,
+        grid_reso: np.ndarray | None = None,
+        world_offset: list[float] | None = None,
+    ) -> list[Any]:
         """
         Create map objects from points.
 
         Args:
-            points (list): List of points.
+            points (np.ndarray): Array of points defining the map.
             reso (float): Resolution of the map.
+            grid_map (np.ndarray, optional): Grid map array for fast collision detection.
+                If None, no precomputed grid is used.
+            grid_reso (np.ndarray, optional): Resolution [x_reso, y_reso] of the grid.
+                If None, the resolution is not specified and grid-based collision is
+                either inferred elsewhere or not used.
+            world_offset (list[float], optional): World offset [x, y].
+                If None, no additional world offset is applied.
 
         Returns:
             list: List of ObstacleMap objects.
@@ -72,7 +89,11 @@ class ObjectFactory:
             return []
         return [
             ObstacleMap(
-                shape={"name": "map", "points": points, "reso": reso}, color="k"
+                shape={"name": "map", "points": points, "reso": reso},
+                color="k",
+                grid_map=grid_map,
+                grid_reso=grid_reso,
+                world_offset=world_offset,
             )
         ]
 
@@ -80,9 +101,9 @@ class ObjectFactory:
         self,
         obj_type: str = "robot",
         number: int = 1,
-        distribution: Optional[dict[str, Any]] = None,
-        state: Optional[list[float]] = None,
-        goal: Optional[list[float]] = None,
+        distribution: dict[str, Any] | None = None,
+        state: list[float] | None = None,
+        goal: list[float] | None = None,
         **kwargs: Any,
     ) -> list[Any]:
         """
@@ -135,67 +156,84 @@ class ObjectFactory:
         return object_list
 
     def create_robot(
-        self, kinematics: Optional[dict[str, Any]] = None, **kwargs: Any
+        self, kinematics: dict[str, Any] | None = None, **kwargs: Any
     ) -> Any:
         """
         Create a robot based on kinematics.
 
+        Uses the kinematics registry to look up handler-class metadata
+        (default color, state_dim, description) and creates an ``ObjectBase``
+        directly.  Static / ``None`` kinematics still produce an
+        ``ObjectStatic``.
+
         Args:
             kinematics (dict): Kinematics configuration.
             **kwargs: Additional parameters for robot creation.
 
         Returns:
-            Robot: An instance of a robot.
+            ObjectBase: An instance of a robot.
         """
         if kinematics is None:
             kinematics = {}
         kinematics_name = kinematics.get("name")
 
-        if kinematics_name == "diff":
-            return RobotDiff(kinematics=kinematics, **kwargs)
-        if kinematics_name == "acker":
-            return RobotAcker(kinematics=kinematics, **kwargs)
-        if kinematics_name == "omni":
-            return RobotOmni(kinematics=kinematics, **kwargs)
         if kinematics_name == "static" or kinematics_name is None:
             return ObjectStatic(kinematics=kinematics, role="robot", **kwargs)
-        # elif kinematics_name == "rigid3d":
-        #     return RobotRigid3D(kinematics=kinematics, **kwargs)
-        raise NotImplementedError(f"Robot kinematics {kinematics_name} not implemented")
+
+        handler_cls = KinematicsFactory.get_handler_class(kinematics_name)
+        if handler_cls is None:
+            raise NotImplementedError(
+                f"Robot kinematics {kinematics_name} not implemented"
+            )
+
+        kwargs.setdefault("color", handler_cls.color)
+        kwargs.setdefault("state_dim", handler_cls.state_dim)
+        if handler_cls.description is not None:
+            kwargs.setdefault("description", handler_cls.description)
+
+        return ObjectBase(kinematics=kinematics, role="robot", **kwargs)
 
     def create_obstacle(
-        self, kinematics: Optional[dict[str, Any]] = None, **kwargs: Any
+        self, kinematics: dict[str, Any] | None = None, **kwargs: Any
     ) -> Any:
         """
-        Create a obstacle based on kinematics.
+        Create an obstacle based on kinematics.
+
+        Uses the kinematics registry to look up handler-class metadata
+        (default color, state_dim) and creates an ``ObjectBase`` directly.
+        Static / ``None`` kinematics still produce an ``ObjectStatic``.
 
         Args:
             kinematics (dict): Kinematics configuration.
-            **kwargs: Additional parameters for robot creation.
+            **kwargs: Additional parameters for obstacle creation.
 
         Returns:
-            Obstacle: An instance of an obstacle.
+            ObjectBase: An instance of an obstacle.
         """
         if kinematics is None:
             kinematics = {}
         kinematics_name = kinematics.get("name")
 
-        if kinematics_name == "diff":
-            return ObstacleDiff(kinematics=kinematics, **kwargs)
-        if kinematics_name == "acker":
-            return ObstacleAcker(kinematics=kinematics, **kwargs)
-        if kinematics_name == "omni":
-            return ObstacleOmni(kinematics=kinematics, **kwargs)
         if kinematics_name == "static" or kinematics_name is None:
             return ObjectStatic(kinematics=kinematics, role="obstacle", **kwargs)
-        raise NotImplementedError(f"Robot kinematics {kinematics_name} not implemented")
+
+        handler_cls = KinematicsFactory.get_handler_class(kinematics_name)
+        if handler_cls is None:
+            raise NotImplementedError(
+                f"Obstacle kinematics {kinematics_name} not implemented"
+            )
+
+        kwargs.setdefault("color", handler_cls.obstacle_color)
+        kwargs.setdefault("state_dim", handler_cls.state_dim)
+
+        return ObjectBase(kinematics=kinematics, role="obstacle", **kwargs)
 
     def generate_state_list(
         self,
         number: int = 1,
-        distribution: Optional[dict[str, Any]] = None,
-        state: Optional[list[float]] = None,
-        goal: Optional[list[float]] = None,
+        distribution: dict[str, Any] | None = None,
+        state: list[float] | None = None,
+        goal: list[float] | None = None,
     ) -> tuple[list[list[float]], list[list[float]]]:
         """
         Generate a list of state vectors for multiple objects based on the specified distribution method.

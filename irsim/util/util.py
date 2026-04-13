@@ -1,10 +1,13 @@
+import difflib
+import inspect
 import math
 import os
 import sys
 import time
 from collections import deque
+from functools import wraps
 from math import atan2, cos, pi, sin
-from typing import Any, Optional, Union
+from typing import Any
 
 import numpy as np
 from shapely.affinity import affine_transform
@@ -13,57 +16,69 @@ from irsim.config import env_param
 from irsim.util.random import rng
 
 
-def file_check(
-    file_name: Optional[str], root_path: Optional[str] = None
-) -> Optional[str]:
+def file_check(file_name: str | None, root_path: str | None = None) -> str | None:
     """
     Check whether a file exists and return its absolute path.
 
+    Searches in the following order:
+    1. The given path directly
+    2. Relative to sys.path[0]
+    3. Relative to the current working directory
+    4. Relative to the script directory
+    5. Recursively under root_path (lazy fallback)
+
     Args:
-        file_name (str): Name of the file to check.
-        root_path (str, optional): Root path to use if the file is not found.
+        file_name (str | None): Name or relative path of the file to check.
+            Returns None immediately if None.
+        root_path (str | None): Root directory for recursive search fallback.
 
     Returns:
-        str: Absolute path of the file if found.
-
-    Raises:
-        FileNotFoundError: If the file is not found.
+        str | None: Absolute path of the file if found, None otherwise.
     """
     if file_name is None:
         return None
 
-    if os.path.exists(file_name):
-        abs_file_name = file_name
-    elif os.path.exists(sys.path[0] + "/" + file_name):
-        abs_file_name = sys.path[0] + "/" + file_name
-    elif os.path.exists(os.getcwd() + "/" + file_name):
-        abs_file_name = os.getcwd() + "/" + file_name
-    else:
-        if root_path is None:
-            # raise FileNotFoundError("File not found: " + file_name)
-            logger = getattr(env_param, "logger", None)
-            if logger is not None:
-                logger.warning(f"{file_name} not found")
-            return None
-        # root_file_name = root_path + "/" + file_name
-        root_file_name = find_file(root_path, file_name)
-        if os.path.exists(root_file_name):
-            abs_file_name = root_file_name
-        else:
-            # raise FileNotFoundError("File not found: " + root_file_name)
-            logger = getattr(env_param, "logger", None)
-            if logger is not None:
-                logger.warning(f"{root_file_name} not found")
-            return None
+    paths_to_check = [
+        file_name,
+        os.path.join(sys.path[0], file_name),
+        os.path.join(os.getcwd(), file_name),
+        os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), file_name),
+    ]
 
-    return abs_file_name
+    for candidate_path in paths_to_check:
+        if os.path.isfile(candidate_path):
+            return os.path.abspath(candidate_path)
+
+    found = find_file(root_path, file_name) if root_path else None
+    if found:
+        return found
+
+    logger = getattr(env_param, "logger", None)
+    if logger is not None:
+        logger.warning(f"{file_name} not found")
+
+    return None
 
 
-def find_file(root_path: str, target_filename: str) -> str:
+def find_file(root_path: str | None, target_filename: str) -> str | None:
+    """
+    Recursively search for a file under root_path.
+
+    Args:
+        root_path (str | None): Directory to search under. Returns None if None.
+        target_filename (str): Name of the file to find.
+
+    Returns:
+        str | None: Absolute path if found, None otherwise.
+    """
+
+    if root_path is None:
+        return None
+
     for dirpath, _dirnames, filenames in os.walk(root_path):
         if target_filename in filenames:
-            return os.path.join(dirpath, target_filename)
-    return target_filename
+            return os.path.abspath(os.path.join(dirpath, target_filename))
+    return None
 
 
 def WrapToPi(rad: float, positive: bool = False) -> float:
@@ -79,10 +94,10 @@ def WrapToPi(rad: float, positive: bool = False) -> float:
         The function `WrapToPi(rad)` returns the angle `rad` wrapped to the range [-pi, pi].
 
     """
-    while rad > pi:
-        rad = rad - 2 * pi
-    while rad < -pi:
-        rad = rad + 2 * pi
+    if not np.isfinite(rad):
+        return 0.0
+
+    rad = (rad + pi) % (2 * pi) - pi
 
     return rad if not positive else abs(rad)
 
@@ -99,12 +114,10 @@ def WrapTo2Pi(rad: float) -> float:
         The function `WrapTo2Pi(rad)` returns the angle `rad` wrapped to the range [0, 2pi].
 
     """
-    while rad > 2 * pi:
-        rad = rad - 2 * pi
-    while rad < 0:
-        rad = rad + 2 * pi
+    if not np.isfinite(rad):
+        return 0.0
 
-    return rad
+    return rad % (2 * pi)
 
 
 def WrapToRegion(rad: float, range: list[float]) -> float:
@@ -118,7 +131,8 @@ def WrapToRegion(rad: float, range: list[float]) -> float:
     Returns:
         float: Wrapped angle.
     """
-    assert len(range) >= 2
+    if len(range) < 2:
+        raise ValueError(f"Parameter 'range' must have length >= 2, got {len(range)}")
     assert range[1] - range[0] == 2 * pi
     while rad > range[1]:
         rad = rad - 2 * pi
@@ -339,7 +353,7 @@ def geometry_transform(geometry: Any, state: np.ndarray) -> Any:
     return affine_transform(geometry, [a, b, d, e, xoff, yoff])
 
 
-def vertices_transform(vertices: np.ndarray, state: np.ndarray) -> Optional[np.ndarray]:
+def vertices_transform(vertices: np.ndarray, state: np.ndarray) -> np.ndarray | None:
     """
     Transform vertices using a state.
 
@@ -382,7 +396,9 @@ def omni_to_diff(
         np.array: Differential velocity [linear, angular] (2x1).
     """
     if isinstance(vel_omni, list):
-        vel_omni = np.array(vel_omni).reshape((2, 1))
+        vel_omni = np.array(vel_omni)
+    if isinstance(vel_omni, np.ndarray) and vel_omni.ndim == 1:
+        vel_omni = vel_omni[:, np.newaxis]
 
     speed = np.sqrt(vel_omni[0, 0] ** 2 + vel_omni[1, 0] ** 2)
     
@@ -454,7 +470,7 @@ def cross_product(o: list[float], a: list[float], b: list[float]) -> float:
     return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
 
 
-def is_convex_and_ordered(points: np.ndarray) -> tuple[bool, Optional[str]]:
+def is_convex_and_ordered(points: np.ndarray) -> tuple[bool, str | None]:
     """
     Determine if the polygon is convex and return the order (CW or CCW).
 
@@ -535,7 +551,7 @@ def gen_inequal_from_vertex(vertex: np.ndarray):
 
 
 def distance(
-    point1: Union[list[float], np.ndarray], point2: Union[list[float], np.ndarray]
+    point1: list[float] | np.ndarray, point2: list[float] | np.ndarray
 ) -> float:
     """
     Compute the distance between two points.
@@ -555,7 +571,7 @@ def dist_hypot(x1: float, y1: float, x2: float, y2: float) -> float:
 
 
 def random_point_range(
-    range_low: Optional[list[float]] = None, range_high: Optional[list[float]] = None
+    range_low: list[float] | None = None, range_high: list[float] | None = None
 ) -> list[float]:
     """
     Generate a random point within a range.
@@ -568,20 +584,23 @@ def random_point_range(
         np.array: Random point within the range.
     """
     if range_low is None:
-        range_low = [0, 0, -pi]
-    if range_high is None:
-        range_high = [10, 10, pi]
-
-    if isinstance(range_low, list):
+        range_low = np.c_[[0, 0, -pi]]
+    elif isinstance(range_low, list):
         range_low = np.c_[range_low]
+    elif isinstance(range_low, np.ndarray) and range_low.ndim == 1:
+        range_low = range_low[:, np.newaxis]
 
-    if isinstance(range_high, list):
+    if range_high is None:
+        range_high = np.c_[[10, 10, pi]]
+    elif isinstance(range_high, list):
         range_high = np.c_[range_high]
+    elif isinstance(range_high, np.ndarray) and range_high.ndim == 1:
+        range_high = range_high[:, np.newaxis]
 
     return rng.uniform(range_low, range_high)
 
 
-def is_2d_list(data: Union[list, deque]) -> bool:
+def is_2d_list(data: list | deque) -> bool:
     """
     Returns True if 'data' is a non-empty list of lists (or tuples), indicating a 2D structure.
     Returns False if 'data' is a single list
@@ -601,6 +620,184 @@ def is_2d_list(data: Union[list, deque]) -> bool:
 
 
 # decorator
+
+
+def validate_shape(**shape_requirements):
+    """
+    Decorator to validate that numpy array parameters have minimum shape[0] dimensions.
+
+    Args:
+        **shape_requirements: Mapping of parameter names to minimum shape[0] values.
+            e.g., state=3 means state.shape[0] must be >= 3
+
+    Example:
+        @validate_shape(state=3, velocity=2)
+        def differential_kinematics(state, velocity, step_time):
+            ...
+
+    Raises:
+        TypeError: If parameter is not a numpy array.
+        ValueError: If parameter shape[0] is less than required.
+    """
+
+    def decorator(func):
+        sig = inspect.signature(func)
+
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            bound = sig.bind(*args, **kwargs)
+            bound.apply_defaults()
+
+            for param, min_dim in shape_requirements.items():
+                if param in bound.arguments:
+                    value = bound.arguments[param]
+                    if value is not None:
+                        if not hasattr(value, "shape"):
+                            raise TypeError(
+                                f"Parameter '{param}' must be a numpy array, "
+                                f"got {type(value).__name__}"
+                            )
+                        if value.shape[0] < min_dim:
+                            raise ValueError(
+                                f"Parameter '{param}' must have shape[0] >= {min_dim}, "
+                                f"got {value.shape[0]}"
+                            )
+
+            return func(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
+
+
+def validate_length(**length_requirements):
+    """
+    Decorator to validate that sequence parameters have minimum length.
+
+    Args:
+        **length_requirements: Mapping of parameter names to minimum length values.
+            e.g., alpha=4 means len(alpha) must be >= 4
+
+    Example:
+        @validate_length(alpha=4)
+        def some_function(alpha):
+            ...
+
+    Raises:
+        TypeError: If parameter doesn't support len().
+        ValueError: If parameter length is less than required.
+    """
+
+    def decorator(func):
+        sig = inspect.signature(func)
+
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            bound = sig.bind(*args, **kwargs)
+            bound.apply_defaults()
+
+            for param, min_len in length_requirements.items():
+                if param in bound.arguments:
+                    value = bound.arguments[param]
+                    if value is not None:
+                        try:
+                            length = len(value)
+                        except TypeError:
+                            raise TypeError(
+                                f"Parameter '{param}' must be a sequence, "
+                                f"got {type(value).__name__}"
+                            ) from None
+                        if length < min_len:
+                            raise ValueError(
+                                f"Parameter '{param}' must have length >= {min_len}, "
+                                f"got {length}"
+                            )
+
+            return func(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
+
+
+def ensure_column_vector(*param_names):
+    """
+    Decorator to convert parameters to column vectors (Nx1 numpy arrays).
+
+    - Lists are converted to numpy arrays
+    - 1D arrays are reshaped to column vectors (N,) -> (N, 1)
+    - None values are left unchanged
+
+    Args:
+        *param_names: Names of parameters to convert.
+
+    Example:
+        @ensure_column_vector('state', 'velocity')
+        def some_function(state, velocity, step_time):
+            ...
+    """
+
+    def decorator(func):
+        sig = inspect.signature(func)
+
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            bound = sig.bind(*args, **kwargs)
+            bound.apply_defaults()
+
+            for param in param_names:
+                if param in bound.arguments:
+                    value = bound.arguments[param]
+                    if value is not None:
+                        if isinstance(value, list):
+                            value = np.array(value)
+                        if isinstance(value, np.ndarray) and value.ndim == 1:
+                            value = value[:, np.newaxis]
+                        bound.arguments[param] = value
+
+            return func(*bound.args, **bound.kwargs)
+
+        return wrapper
+
+    return decorator
+
+
+def ensure_numpy(*param_names):
+    """
+    Decorator to convert parameters to numpy arrays.
+
+    - Lists are converted to numpy arrays
+    - None values are left unchanged
+    - Already numpy arrays are left unchanged
+
+    Args:
+        *param_names: Names of parameters to convert.
+
+    Example:
+        @ensure_numpy('data', 'weights')
+        def some_function(data, weights):
+            ...
+    """
+
+    def decorator(func):
+        sig = inspect.signature(func)
+
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            bound = sig.bind(*args, **kwargs)
+            bound.apply_defaults()
+
+            for param in param_names:
+                if param in bound.arguments:
+                    value = bound.arguments[param]
+                    if value is not None and isinstance(value, list):
+                        bound.arguments[param] = np.array(value)
+
+            return func(*bound.args, **bound.kwargs)
+
+        return wrapper
+
+    return decorator
 
 
 def time_it(name: str = "Function") -> Any:
@@ -647,7 +844,7 @@ def normalize_actions(func):
         if action is not None:
             if isinstance(action, list):
                 if isinstance(action_id, list):
-                    for a, ai in zip(action, action_id):
+                    for a, ai in zip(action, action_id, strict=True):
                         actions[int(ai)] = a
                 else:
                     start = int(action_id)
@@ -696,9 +893,9 @@ def time_it2(name: str = "Function") -> Any:
 
 def to_numpy(
     data: Any,
-    default: Optional[np.ndarray] = None,
-    expected_shape: Optional[tuple[int, ...]] = None,
-) -> Optional[np.ndarray]:
+    default: np.ndarray | None = None,
+    expected_shape: tuple[int, ...] | None = None,
+) -> np.ndarray | None:
     """
     Convert input to numpy array and optionally reshape.
 
@@ -802,3 +999,41 @@ def points_to_xy_list(
     if three_d:
         return x_list, y_list, z_list
     return x_list, y_list
+
+
+def check_unknown_kwargs(
+    kwargs: dict,
+    valid_keys: set[str],
+    context: str = "",
+    logger=None,
+) -> list[str]:
+    """Warn about unknown keyword arguments and suggest corrections.
+
+    When *logger* is not provided, falls back to the global
+    ``env_param.logger`` (same convention used by :func:`file_check`).
+
+    Args:
+        kwargs: Dictionary of provided keyword arguments.
+        valid_keys: Set of valid parameter names.
+        context: Optional context string for the warning message.
+        logger: Optional logger to emit warnings. If ``None``, the
+            global ``env_param.logger`` is used when available.
+
+    Returns:
+        List of warning message strings for unknown keys.
+    """
+    if logger is None:
+        logger = getattr(env_param, "logger", None)
+
+    unknown = set(kwargs) - valid_keys
+    messages = []
+    for key in sorted(unknown):
+        matches = difflib.get_close_matches(key, valid_keys, n=3, cutoff=0.6)
+        if matches:
+            msg = f"Unknown parameter '{key}'{context}. Did you mean: {', '.join(matches)}?"
+        else:
+            msg = f"Unknown parameter '{key}'{context}. Valid parameters: {', '.join(sorted(valid_keys))}"
+        messages.append(msg)
+        if logger:
+            logger.warning(msg)
+    return messages

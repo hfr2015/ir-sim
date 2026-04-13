@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import importlib
 from collections import Counter
-from typing import Any, Optional, Union
+from typing import Any
 
 import matplotlib
 import numpy as np
@@ -135,15 +135,18 @@ class EnvBase:
 
     def __init__(
         self,
-        world_name: Optional[str] = None,
+        world_name: str | None = None,
         display: bool = True,
         disable_all_plot: bool = False,
         save_ani: bool = False,
         full: bool = False,
-        log_file: Optional[str] = None,
+        log_file: str | None = None,
         log_level: str = "INFO",
-        seed: Optional[int] = None,
+        seed: int | None = None,
     ) -> None:
+        # Reset object ID counter so each environment starts from 0
+        ObjectBase.reset_id_iter()
+
         # Bind per-instance config objects
         self._env_param = EnvParam()
         self._world_param = WorldParam()
@@ -254,8 +257,8 @@ class EnvBase:
     @normalize_actions
     def step(
         self,
-        action: Optional[Union[np.ndarray, list[Any]]] = None,
-        action_id: Optional[Union[int, list[int]]] = 0,
+        action: np.ndarray | list[Any] | None = None,
+        action_id: int | list[int] | None = 0,
     ) -> None:
         """
         Perform a single simulation step in the environment.
@@ -327,7 +330,10 @@ class EnvBase:
         """
 
         action = action + [None] * (len(self.objects) - len(action))
-        [obj.step(action, sensor_step) for obj, action in zip(self.objects, action)]
+        [
+            obj.step(action, sensor_step)
+            for obj, action in zip(self.objects, action, strict=True)
+        ]
 
         self.build_tree()
 
@@ -376,7 +382,7 @@ class EnvBase:
         group_actions = [
             ga for group in self._object_groups for ga in group.gen_group_vel()
         ]
-        for i, (a, ga) in enumerate(zip(action, group_actions)):
+        for i, (a, ga) in enumerate(zip(action, group_actions, strict=False)):
             if a is None and ga is not None:
                 action[i] = ga
 
@@ -386,7 +392,7 @@ class EnvBase:
     def render(
         self,
         interval: float = 0.01,
-        figure_kwargs: Optional[dict[str, Any]] = None,
+        figure_kwargs: dict[str, Any] | None = None,
         mode: str = "dynamic",
         **kwargs: Any,
     ) -> None:
@@ -521,6 +527,9 @@ class EnvBase:
             return
 
         if self.save_ani:
+            if "ani_name" not in kwargs:
+                kwargs["ani_name"] = f"animation_{self._world.name}"
+
             self._env_plot.save_animate(**kwargs)
 
         if self.display:
@@ -554,6 +563,10 @@ class EnvBase:
             f"Simulation Environment '{self._world.name}' ended. Total time {self._world.time:.2f} seconds."
         )
 
+    def close(self, ending_time: float = 3.0, **kwargs: Any) -> None:
+        """Alias for :py:meth:`end` for Gym-style API compatibility."""
+        self.end(ending_time, **kwargs)
+
     def quit(self) -> None:
         """
         Quit the environment.
@@ -563,7 +576,7 @@ class EnvBase:
         self.end(ending_time=1.0)
         raise SystemExit(0)
 
-    def done(self, mode: str = "all") -> Optional[bool]:
+    def done(self, mode: str = "all") -> bool | None:
         """
         Check if the simulation should terminate based on robot completion status.
 
@@ -703,7 +716,7 @@ class EnvBase:
         """
 
         self._reset_all()
-        self.step(action=np.zeros((2, 1)))
+        self.step(action=[np.zeros((2, 1))] * self.robot_number)
         self._world.reset()
         self.reset_plot()
         self.set_status("Reset")
@@ -729,9 +742,9 @@ class EnvBase:
     # region: environment change
     def random_obstacle_position(
         self,
-        range_low: Union[list[float], np.ndarray, None] = None,
-        range_high: Union[list[float], np.ndarray, None] = None,
-        ids: Optional[list[int]] = None,
+        range_low: list[float] | np.ndarray | None = None,
+        range_high: list[float] | np.ndarray | None = None,
+        ids: list[int] | None = None,
         non_overlapping: bool = False,
     ) -> None:
         """
@@ -772,11 +785,11 @@ class EnvBase:
 
     def random_polygon_shape(
         self,
-        center_range: Optional[list[float]] = None,
-        avg_radius_range: Optional[list[float]] = None,
-        irregularity_range: Optional[list[float]] = None,
-        spikeyness_range: Optional[list[float]] = None,
-        num_vertices_range: Optional[list[int]] = None,
+        center_range: list[float] | None = None,
+        avg_radius_range: list[float] | None = None,
+        irregularity_range: list[float] | None = None,
+        spikeyness_range: list[float] | None = None,
+        num_vertices_range: list[int] | None = None,
     ) -> None:
         """
         Random polygon shapes for the obstacles in the environment.
@@ -831,7 +844,7 @@ class EnvBase:
 
         self._env_plot.step("all", self.obstacle_list)
 
-    def reload(self, world_name: Optional[str] = None) -> None:
+    def reload(self, world_name: str | None = None) -> None:
         """
         Reload the environment from YAML and update the current figure.
 
@@ -879,6 +892,20 @@ class EnvBase:
 
         return self.object_factory.create_obstacle(**kwargs)
 
+    def create_robot(self, **kwargs: Any):
+        """
+        Create a robot in the environment.
+
+        Args:
+            **kwargs: Additional parameters for robot creation.
+                see ObjectFactory.create_robot for detail
+
+        Returns:
+            Robot: An instance of a robot.
+        """
+
+        return self.object_factory.create_robot(**kwargs)
+
     def add_object(self, obj: ObjectBase) -> None:
         """
         Add the object to the environment, enforcing unique names.
@@ -890,6 +917,9 @@ class EnvBase:
             raise ValueError(f"Object name '{obj.name}' already exists.")
         obj._env = self
         self._objects.append(obj)
+        if not self.disable_all_plot:
+            obj._init_plot(self._env_plot.ax)
+            obj._step_plot()
         self.build_tree()
 
     def add_objects(self, objs: list[ObjectBase]) -> None:
@@ -910,6 +940,9 @@ class EnvBase:
             raise ValueError(f"Object names already exist: {conflicts}")
         for obj in objs:
             obj._env = self
+            if not self.disable_all_plot:
+                obj._init_plot(self._env_plot.ax)
+                obj._step_plot()
         self._objects.extend(objs)
         self.build_tree()
 
@@ -1062,13 +1095,13 @@ class EnvBase:
         """
         return [obj for obj in self.objects if obj.group_name == group_name]
 
-    def get_object_by_name(self, name: str) -> Optional[ObjectBase]:
+    def get_object_by_name(self, name: str) -> ObjectBase | None:
         """
         Get the object with the given name.
         """
         return next((obj for obj in self.objects if obj.name == name), None)
 
-    def get_object_by_id(self, target_id: int) -> Optional[ObjectBase]:
+    def get_object_by_id(self, target_id: int) -> ObjectBase | None:
         """
         Get the object with the given id.
         """
@@ -1089,18 +1122,27 @@ class EnvBase:
         """
         self._env_plot.fig.canvas.manager.set_window_title(window_name)
 
-    def set_random_seed(self, seed: Optional[int] = None) -> None:
+    def set_random_seed(self, seed: int | None = None, reload: bool = False) -> None:
         """
         Set IR-SIM's random seed for reproducibility.
 
         Args:
             seed (int, optional): Seed for IR-SIM's project RNG. If ``None``, a
                 new unseeded generator is created (non-reproducible). This
-                controls randomness that goes through IR-SIM's RNG. Custom code
-                using ``np.random.*`` or Python ``random`` must be seeded separately
-                or migrated to use IR-SIM's RNG.
+                controls randomness that goes through IR-SIM's RNG. Custom
+                code using ``np.random.*`` or Python ``random`` must be
+                seeded separately or migrated to use IR-SIM's RNG.
+            reload (bool): If True, reload the environment to regenerate
+                random obstacles with the new seed. Default is False (only
+                sets seed).
+
+        Example:
+            >>> env.set_random_seed(100)  # Only set seed, no regeneration
+            >>> env.set_random_seed(100, reload=True)  # Set seed and regenerate env by yaml file
         """
         set_seed(seed)
+        if reload:
+            self.reload()
 
     def set_status(self, status: str) -> None:
         """
@@ -1110,7 +1152,7 @@ class EnvBase:
 
     def save_figure(
         self,
-        save_name: Optional[str] = None,
+        save_name: str | None = None,
         include_index: bool = False,
         save_gif: bool = False,
         **kwargs: Any,
@@ -1141,14 +1183,28 @@ class EnvBase:
         Load behavior parameters from the script. Please refer to the behavior_methods.py file for more details.
         Please make sure the python file is placed in the same folder with the implemented script.
 
+        This method imports the specified module and reinitializes all behaviors
+        (both individual and group) so that newly registered behaviors are available.
+
         Args:
-            behaviors (str): name of the bevavior script.
+            behaviors (str): name of the behavior script.
         """
 
         try:
             importlib.import_module(behaviors)
         except ImportError as e:
             print(f"Failed to load module '{behaviors}': {e}")
+            return
+
+        # Reinitialize individual behaviors for all objects
+        for obj in self.objects:
+            if hasattr(obj, "obj_behavior") and obj.obj_behavior is not None:
+                obj.obj_behavior._init_behavior_class()
+
+        # Reinitialize group behaviors for all object groups
+        for group in self._object_groups:
+            if hasattr(group, "group_behavior") and group.group_behavior is not None:
+                group.group_behavior._init_group_behavior_class()
 
     # region: property
     @property

@@ -8,7 +8,7 @@ if TYPE_CHECKING:
 
 # Optional pynput import (allows fallback to Matplotlib key events)
 # Predeclare for type checkers
-keyboard: Optional[Any] = None
+keyboard: Any | None = None
 try:  # pragma: no cover - availability depends on environment
     from pynput import keyboard as _pynput_keyboard
 
@@ -53,13 +53,14 @@ class KeyboardControl:
         - x: Switch between keyboard and auto control modes
         - l: Reload the environment
         - F5: Debug the environment
+        - y: Toggle display render window
 
     Notes:
         - The "mpl" backend requires the Matplotlib figure window to have focus to receive key events.
         - In keyboard control mode, behavior planners are ignored; robot motion follows key input.
     """
 
-    def __init__(self, env_ref: Optional[Any] = None, **keyboard_kwargs: Any) -> None:
+    def __init__(self, env_ref: Any | None = None, **keyboard_kwargs: Any) -> None:
         """
         Initialize keyboard control for the environment.
 
@@ -90,6 +91,7 @@ class KeyboardControl:
             - x: Switch between keyboard and auto control modes
             - l: Reload the environment
             - F5: Debug the environment
+            - y: Toggle display render window
         """
 
         # Store environment reference for reset functionality
@@ -149,6 +151,7 @@ class KeyboardControl:
                 ["l", "reload the environment"],
                 ["F5", "debug the environment"],
                 ["v", "save the current figure"],
+                ["y", "toggle display render window"],
             ]
 
             headers = ["Key", "Function"]
@@ -167,8 +170,8 @@ class KeyboardControl:
             self.backend = "mpl"
 
         # Track Matplotlib window focus to gate pynput callbacks
-        # We use button_press_event to detect clicks (more reliable focus indicator)
-        # and figure_leave_event as a fallback for mouse-based deactivation
+        # Keyboard control is activated when mouse enters the figure area
+        # and deactivated when mouse leaves the figure area
         try:
             fig = plt.gcf()
             self._mpl_enter_cid = fig.canvas.mpl_connect(
@@ -179,10 +182,6 @@ class KeyboardControl:
             )
             self._mpl_close_cid = fig.canvas.mpl_connect(
                 "close_event", self._on_mpl_close
-            )
-            # Track button press to reliably detect when this window gains focus
-            self._mpl_button_cid = fig.canvas.mpl_connect(
-                "button_press_event", self._on_mpl_button_press
             )
         except Exception:
             pass
@@ -310,6 +309,11 @@ class KeyboardControl:
             if key.char == "l":
                 self.env_ref.reload_flag = True
                 self.logger.info("reload the environment")
+
+            if key.char == "y":
+                self.env_ref.display = not self.env_ref.display
+                state = "on" if self.env_ref.display else "off"
+                self.logger.info(f"toggle display: {state}")
 
             self.key_vel = np.array([[self.key_lv], [self.key_ang]])
 
@@ -449,6 +453,11 @@ class KeyboardControl:
             self.logger.info("save the figure")
             self.env_ref.save_figure_flag = True
 
+        if base == "y":
+            self.env_ref.display = not self.env_ref.display
+            state = "on" if self.env_ref.display else "off"
+            self.logger.info(f"toggle display: {state}")
+
         # Quit environment on ESC/escape
         if base in ("escape", "esc"):
             self.env_ref.quit_flag = True
@@ -541,15 +550,14 @@ class KeyboardControl:
         if _active_keyboard_instance is self:
             _active_keyboard_instance = None
 
-    def _on_mpl_button_press(self, event: Any) -> None:
-        """Handle mouse button press to reliably detect window focus."""
-        self._set_active()
-
     def _set_active(self) -> None:
         """Set this instance as the active keyboard controller."""
         global _active_keyboard_instance
         # Deactivate the previous active instance
-        if _active_keyboard_instance is not None and _active_keyboard_instance is not self:
+        if (
+            _active_keyboard_instance is not None
+            and _active_keyboard_instance is not self
+        ):
             _active_keyboard_instance._is_active = False
         # Activate this instance
         self._is_active = True

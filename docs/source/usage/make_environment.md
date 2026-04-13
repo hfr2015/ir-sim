@@ -28,7 +28,7 @@ The `make` function creates an environment from a configuration file. Supported 
   ``np.random`` or Python ``random`` should either switch to IR-SIM's RNG or be
   seeded separately.
 
-For more details, see the [EnvBase](#irsim.env.env_base.EnvBase) class documentation.
+For more details, see the {py:class}`~irsim.env.env_base.EnvBase` class documentation.
 :::
 
 :::{tab-item} YAML Configuration
@@ -67,7 +67,7 @@ The configuration file is a YAML file that specifies the properties of the envir
   - `'stop'`: Stop simulation when collision occurs (default)
   - `'unobstructed'`: Ignore all collisions
   - `'unobstructed_obstacles'`: Ignore only obstacle collisions
-- **`obstacle_map`**: Optional path to a pre-defined obstacle map file
+- **`obstacle_map`**: Optional. Path to an obstacle map image, or a generator spec (e.g. `{ name: perlin, ... }`). See [Configure grid map](configure_grid_map).
 
 ### Performance Considerations
 
@@ -79,7 +79,7 @@ The configuration file is a YAML file that specifies the properties of the envir
 You can use `sample_time` to control the rendering frequency and accelerate the simulation speed. The default value of `sample_time` is the same as `step_time`.
 ```
 
-For more detailed parameter information, see the [YAML Configuration](../yaml_config/index.rst) reference.
+For more detailed parameter information, see the [YAML Configuration](../yaml_config/index) reference.
 
 :::{tip}
 **Automatic Configuration Detection**: The default YAML configuration file has the same name as your Python script. For example, if you create a script named `test.py`, IR-SIM automatically looks for `test.yaml` in the same directory.
@@ -120,6 +120,7 @@ env.end()  # Clean up resources
 - **`env.render(interval)`**: Updates the visualization with specified time interval between frames
 - **`env.done()`**: Returns `True` if simulation completion conditions are met
 - **`env.end()`**: Properly closes the environment and releases resources
+- **`env.close()`**: Alias for `env.end()`, provided for [Gym](https://gymnasium.farama.org/)-style API compatibility
 
 ::::{tip}
 Update order
@@ -220,4 +221,215 @@ world:
 ```
 :::
 ::::
+
+
+## Dynamic Object Management
+
+In addition to defining objects in YAML configuration files, you can create and add objects programmatically at runtime. This is useful for spawning objects dynamically during simulation, such as generating random obstacles or adding robots on-the-fly.
+
+### Creating Objects Programmatically
+
+Use `env.create_robot()` and `env.create_obstacle()` to create objects with keyword arguments:
+
+```python
+import irsim
+
+env = irsim.make('empty_world.yaml')
+
+# Create a differential-drive robot
+robot = env.create_robot(
+    kinematics={"name": "diff"},
+    shape={"name": "circle", "radius": 0.2},
+    state=[1, 1, 0],
+    goal=[8, 8, 0],
+    name="robot_0",
+)
+
+# Create a static circular obstacle
+obstacle = env.create_obstacle(
+    shape={"name": "circle", "radius": 0.5},
+    state=[5, 5, 0],
+    name="obs_0",
+)
+```
+
+Common keyword arguments include:
+
+- **`kinematics`** (dict): Kinematics model, e.g. `{"name": "diff"}`, `{"name": "omni"}`, `{"name": "acker"}`. Omit or use `{"name": "static"}` for static objects.
+- **`shape`** (dict): Shape definition, e.g. `{"name": "circle", "radius": 0.5}` or `{"name": "polygon", "vertices": [[0,0],[1,0],[0,1]]}`.
+- **`state`** (list): Initial state `[x, y, theta, ...]`.
+- **`goal`** (list): Goal state `[x, y, theta, ...]`.
+- **`color`** (str): Object color (default varies by kinematics type).
+- **`name`** (str): Unique object name. Must not conflict with existing objects.
+- **`goal_threshold`** (float): Distance threshold for arrival detection (default: 0.1).
+
+For the full list of parameters, see the {py:class}`~irsim.world.object_base.ObjectBase` class documentation.
+
+### Adding Objects to the Environment
+
+After creating objects, add them to the environment with `env.add_object()` or `env.add_objects()`:
+
+```python
+# Add a single object
+env.add_object(robot)
+
+# Add multiple objects at once
+env.add_objects([obstacle])
+```
+
+Each object must have a unique name. Adding an object with a duplicate name raises a `ValueError`.
+
+## Multiple Environments
+
+IR-SIM supports creating and running multiple environments simultaneously. Each environment maintains its own isolated state, including world parameters, objects, and simulation time. This is useful for:
+
+- **Parallel simulations**: Running multiple scenarios simultaneously
+- **Comparison studies**: Comparing different algorithms or configurations
+- **Training**: Running multiple instances for reinforcement learning
+
+### Creating Multiple Environments
+
+```python
+import irsim
+
+# Create two separate environments
+env1 = irsim.make('scenario_a.yaml')
+env2 = irsim.make('scenario_b.yaml')
+
+# Each environment has its own state
+print(f"Env1 robots: {env1.robot_number}")
+print(f"Env2 robots: {env2.robot_number}")
+```
+
+### Isolated Parameters
+
+Each environment has completely separate parameter instances:
+
+```python
+import irsim
+
+env1 = irsim.make('world1.yaml')
+env2 = irsim.make('world2.yaml')
+
+# World parameters are isolated
+env1.world_param.control_mode = 'keyboard'
+print(f"Env1 control mode: {env1.world_param.control_mode}")  # keyboard
+print(f"Env2 control mode: {env2.world_param.control_mode}")  # auto (unchanged)
+
+# Simulation time is independent
+for _ in range(10):
+    env1.step()
+
+for _ in range(5):
+    env2.step()
+
+print(f"Env1 time: {env1.time}")  # 1.0 (10 steps * 0.1)
+print(f"Env2 time: {env2.time}")  # 0.5 (5 steps * 0.1)
+```
+
+### Running Multiple Environments
+
+::::{tab-set}
+
+:::{tab-item} Sequential Execution
+
+```python
+import irsim
+
+env1 = irsim.make('scenario_a.yaml', display=True)
+env2 = irsim.make('scenario_b.yaml', display=True)
+
+# Run both environments in the same loop
+for i in range(500):
+    # Step both environments
+    env1.step()
+    env2.step()
+
+    # Render both (creates two windows)
+    env1.render(0.01)
+    env2.render(0.01)
+
+    # Check completion independently
+    if env1.done() and env2.done():
+        break
+
+env1.end()
+env2.end()
+```
+:::
+
+:::{tab-item} Headless Parallel (for Training)
+
+```python
+import irsim
+
+# Create multiple headless environments for training
+num_envs = 4
+envs = [
+    irsim.make(f'training_world.yaml', display=False, seed=i)
+    for i in range(num_envs)
+]
+
+# Run training loop
+for episode in range(100):
+    # Reset all environments
+    for env in envs:
+        env.reset()
+
+    # Collect experiences from all environments
+    for step in range(1000):
+        actions = [get_action(env) for env in envs]  # Your policy
+
+        for env, action in zip(envs, actions):
+            env.step(action)
+
+        # Check if any environment is done
+        if all(env.done() for env in envs):
+            break
+
+# Clean up
+for env in envs:
+    env.end()
+```
+:::
+
+::::
+
+### Parameter Isolation Details
+
+Each environment instance creates and binds its own parameter objects:
+
+**`world_param`** - Simulation state and settings:
+
+| Attribute | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `time` | `float` | `0.0` | Current simulation time |
+| `control_mode` | `str` | `"auto"` | Control mode (`"auto"` or `"keyboard"`) |
+| `collision_mode` | `str` | `"stop"` | Collision handling mode |
+| `step_time` | `float` | `0.1` | Time step duration (seconds) |
+| `count` | `int` | `0` | Simulation step counter |
+
+**`env_param`** - Environment objects and utilities:
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `objects` | `list[ObjectBase]` | List of all objects in the environment |
+| `logger` | `EnvLogger` | Logger instance for this environment |
+| `GeometryTree` | `STRtree` | Spatial index for collision detection |
+| `platform_name` | `str` | Operating system name |
+
+**`path_param`** - File path management:
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `root_path` | `str` | Path to irsim package directory |
+| `ani_buffer_path` | `str` | Path for animation frame buffer |
+| `ani_path` | `str` | Path for saved animations |
+| `fig_path` | `str` | Path for saved figures |
+
+Objects within each environment reference their own environment's parameters:
+
+:::{note}
+When creating multiple environments with `display=True`, each environment opens its own visualization window. For training or batch simulations, use `display=False` to disable rendering and improve performance.
+:::
 

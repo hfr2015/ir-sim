@@ -3,7 +3,6 @@
 # This file is distributed under the same license as the IR-SIM package.
 # FIRST AUTHOR <EMAIL@ADDRESS>, 2025.
 #
-#, fuzzy
 msgid ""
 msgstr ""
 "Project-Id-Version: IR-SIM \n"
@@ -208,11 +207,41 @@ msgstr "深度强化学习项目"
 msgid ""
 "`DRL-robot-navigation-IR-SIM <https://github.com/reiniscimurs/DRL-robot-"
 "navigation-IR-SIM>`_"
-msgstr ""
-"`DRL-robot-navigation-IR-SIM <https://github.com/reiniscimurs/DRL-robot-"
-"navigation-IR-SIM>`_"
+msgstr "`DRL-robot-navigation-IR-SIM <https://github.com/reiniscimurs/DRL-robot-navigation-IR-SIM>`_"
 
 #: ../../source/index.rst:219
 msgid "`AutoNavRL <https://github.com/harshmahesheka/AutoNavRL>`_"
 msgstr "`AutoNavRL <https://github.com/harshmahesheka/AutoNavRL>`_"
+
+#: ../../source/index.rst
+msgid "Getting Started"
+msgstr "快速开始"
+
+#: ../../source/index.rst
+msgid "User Guide"
+msgstr "用户指南"
+
+#: ../../source/index.rst
+msgid "Configuration"
+msgstr "配置"
+
+#: ../../source/index.rst
+msgid "API Reference"
+msgstr "API 参考"
+
+#: ../../source/index.rst
+msgid "Contributing"
+msgstr "贡献指南"
+
+#: ../../source/index.rst
+msgid "Changelog"
+msgstr "更新日志"
+
+#: ../../source/index.rst
+msgid "Documentation"
+msgstr "文档"
+
+#: ../../source/index.rst
+msgid "Development"
+msgstr "开发"
 

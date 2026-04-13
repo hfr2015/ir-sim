@@ -136,7 +136,7 @@ This section outlines the configuration parameters available for the `world` sec
 | `control_mode`   | `str`             | `"auto"`    | Control mode of the simulation. Support mode: `auto` or `keyboard`                                         |
 | `collision_mode` | `str`             | `"stop"`    | Collision handling mode (Support: `"stop"`, `"unobstructed"`, `"unobstructed_obstacles"`)                  |
 | `status`         | `str`             | `"None"`    | Initial status of the simulation environment (Support: `"Running"`, `"Arrived"`, `"Collision"`, `"Pause"`) |
-| `obstacle_map`   | `str` (file path) | `None`      | Path to the image file representing the obstacle map                                                       |
+| `obstacle_map`   | `str`, `ndarray`, `dict`, or `null` | `None`      | Generator spec **dict** (e.g. `{ name: image, path: '…' }` or `{ name: perlin, resolution: 0.1, … }`). String path is shorthand for image generator. See [Configure grid map](configure_grid_map). |
 | `mdownsample`    | `int`             | `1`         | Downsampling factor for the obstacle map to reduce resolution and decrease computational load.             |
 | `plot`           | `dict`            | `{}`        | Plotting options for initializing the plot of the world.                                                   |
 
@@ -199,14 +199,27 @@ This section outlines the configuration parameters available for the `world` sec
 (world-map)=
 ::::{dropdown} **world map**
 
-**`obstacle_map`** (`str` (file path), default: `None`)
-: Specifies the file path to an image that serves as the obstacle map. This image is used to generate the grid map that defines the positions of obstacles within the world. Each pixel in the image corresponds to a grid cell in the map, where the color of the pixel determines the presence of an obstacle.
+**`obstacle_map`** (`dict`, `str`, `ndarray`, or `null`, default: `None`)
+: Occupancy grid source. **Canonical form is a generator spec dict** with ``name``; other types are convenience/backward compat.
+
+  - **Generator spec** (`dict`): ``name`` identifies the generator. ``name: image`` with ``path`` (e.g. ``'cave.png'``) loads an image; grid size from the image. ``name: perlin`` (and others) require ``resolution``; grid size = world size / resolution. See [Configure grid map](configure_grid_map). To add a new generator, see [Adding a new map generator](configure_grid_map#add-new-map-generator).
+  - **Image path** (`str`): Treated as ``{ name: image, path: obstacle_map }`` (backward compat).
+  - **Occupancy grid** (`ndarray`): Programmatic use only. Float 0–100; world size must match grid shape.
+  - **`null`**: No obstacle map (empty world).
 
   **Available Maps**: We provide some example maps in the `irsim/world/map` folder and you can also use your own map by 3D datasets like [HM3D](https://aihabitat.org/datasets/hm3d/), [MatterPort3D](https://niessner.github.io/Matterport/), [Gibson](http://gibsonenv.stanford.edu/database/), etc. See [here](https://github.com/hanruihua/ir-sim/tree/features/irsim/world/map/binary_map_generator_hm3d) for more details.
 
   ```yaml
-  # Example usage
-  obstacle_map: 'hm3d_2.png' # hm3d_1.png, hm3d_2.png, hm3d_3.png, hm3d_4.png, hm3d_5.png, hm3d_6.png, hm3d_7.png, hm3d_8.png, hm3d_9.png, cave.png
+  # Image path
+  obstacle_map: 'hm3d_2.png'
+
+  # Procedural generator (grid size = world size / resolution)
+  obstacle_map:
+    name: perlin
+    resolution: 0.1
+    complexity: 0.12
+    fill: 0.32
+    seed: 48
   ```
 
 **`mdownsample`** (`int`, default: `1`)
@@ -325,7 +338,7 @@ All `robot` and `obstacle` entities in the simulation are configured as objects 
 - **`distribution`** — Object placement (`manual`, `random`, `circle`)
 - **`state`** — Initial position (`[x, y, θ]`)
 - **`goal`** — Target destination (`[x, y, θ]`)
-- **`velocity`** — Initial speed (`[v, ω]`, `[vx, vy]`, `[v, φ]`)
+- **`velocity`** — Initial speed (`[v, ω]`, `[forward, lateral]`, `[v, φ]`)
 - **`state_dim`** — State vector size (auto: 3 or 4)
 - **`vel_dim`** — Velocity vector size (auto: 2)
 - **`name`** — Unique identifier for the object.
@@ -386,7 +399,7 @@ All `robot` and `obstacle` entities in the simulation are configured as objects 
 
   **Format by Kinematics:**
   - For `'diff'`: `[v, omega]`, where `v` is linear velocity and `omega` is angular velocity.
-  - For `'omni'`: `[vx, vy]`, velocities along the x and y axes.
+  - For `'omni'`: `[forward, lateral]`, body-frame velocities (forward and lateral relative to heading).
   - For `'acker'`: Typically `[v, phi]`, where `v` is linear velocity and `phi` is steering angle.
 
   ```yaml
@@ -426,8 +439,8 @@ All `robot` and `obstacle` entities in the simulation are configured as objects 
 : Explicitly defines the dimension of the velocity vector. When not specified, this is automatically inferred from the kinematics model. The velocity dimension depends on the control inputs for the specific kinematics.
 
   **Common Values:**
-  - `2`: For differential drive `[v, omega]` or omnidirectional `[vx, vy]`
-  - Additional dimensions may be used for more complex kinematics
+  - `2`: For differential drive `[v, omega]` or omnidirectional `[forward, lateral]`
+  - `3`: For omnidirectional with angular control `[forward, lateral, yaw_rate]`
 
   ```yaml
   # Example usage
@@ -491,7 +504,8 @@ All `robot` and `obstacle` entities in the simulation are configured as objects 
 ```{card} Kinematics Models
 :class-card: sd-bg-light sd-rounded-3
 - **`diff`** — Differential drive, controlled by linear speed and angular velocity (`[v, omega]`)
-- **`omni`** — Omnidirectional, controlled by linear speed along the x and y axes (`[vx, vy]`)
+- **`omni`** — Omnidirectional, controlled by body-frame forward and lateral speed (`[forward, lateral]`)
+- **`omni_angular`** — Omnidirectional with angular control, controlled by body-frame speeds and yaw rate (`[forward, lateral, yaw_rate]`)
 - **`acker`** — Ackermann steering, controlled by linear speed and steering angle (`[v, phi]`)
 ```
 
@@ -597,7 +611,7 @@ All `robot` and `obstacle` entities in the simulation are configured as objects 
     - **`vertices`** (`list`): List of vertices defining the polygon in the format `[[x1, y1], [x2, y2], ...]`, if not provided, a random polygon will be generated.
     - **`random_shape`** (`bool`): Whether to generate a series of random polygons. Default is `False`.
     - **`is_convex`** (`bool`): Whether to generate a series of random convex polygons. Default is `False`.
-    - parameters for random polygon generation, see [random_generate_polygon](#irsim.lib.algorithm.generation.random_generate_polygon) for more details. Parameters include `number `, `center_range `, `avg_radius_range `, `irregularity_range `, `spikeyness_range `, `num_vertices_range `.
+    - parameters for random polygon generation, see {py:func}`~irsim.lib.algorithm.generation.random_generate_polygon` for more details. Parameters include `number `, `center_range `, `avg_radius_range `, `irregularity_range `, `spikeyness_range `, `num_vertices_range `.
       
     ```yaml
     # Example usage
@@ -620,7 +634,7 @@ All `robot` and `obstacle` entities in the simulation are configured as objects 
     - **`vertices`** (`list`): List of vertices defining the line string in the format `[[x1, y1], [x2, y2], ...]`.
     - **`random_shape`** (`bool`): Whether to generate a series of random line strings (polygon). Default is `False`.
     - **`is_convex`** (`bool`): Whether to generate a series of random convex line strings (polygons). Default is `False`.
-    - parameters for random line string generation (polygon), see [random_generate_polygon](#irsim.lib.algorithm.generation.random_generate_polygon) for more details. Parameters include `number `, `center_range `, `avg_radius_range `, `irregularity_range `, `spikeyness_range `, `num_vertices_range `.
+    - parameters for random line string generation (polygon), see {py:func}`~irsim.lib.algorithm.generation.random_generate_polygon` for more details. Parameters include `number `, `center_range `, `avg_radius_range `, `irregularity_range `, `spikeyness_range `, `num_vertices_range `.
 
     ```yaml
     # Example usage
@@ -656,11 +670,12 @@ All `robot` and `obstacle` entities in the simulation are configured as objects 
   **Options:**
   - `'dash'`: Moves directly toward the goal at maximum allowable speed.
     - `wander` (bool/`False`): Whether to add random wandering to the movement. If `True`, the object will have a random goal when reach current goal.
+    - `loop` (bool/`False`): Whether to loop through waypoints continuously. If `True`, the object will restart from the first waypoint after reaching the last one.
     - `target_roles` (str/`all`): Only the objects with the target role will be applied to the behavior. Currently, you can set the target role as `robot` or `obstacle`.
-    - `range_low`(list/`[0, 0, -3.14]`): Lower bounds for random wandering. 
-    - `range_high`(list/`[10, 10, 3.14]`): Upper bounds for random wandering. 
-    - `angle_tolerance` (float/`0.1`): Tolerance for orientation alignment with `diff` and `acker` kinematics. 
-  
+    - `range_low`(list/`[0, 0, -3.14]`): Lower bounds for random wandering.
+    - `range_high`(list/`[10, 10, 3.14]`): Upper bounds for random wandering.
+    - `angle_tolerance` (float/`0.1`): Tolerance for orientation alignment with `diff` and `acker` kinematics.
+
     **Example:**
     ```yaml
     behavior: {name: 'dash', wander: True, range_low: [0, 0, -3.14], range_high: [10, 10, 3.14], angle_tolerance: 0.1}
@@ -668,6 +683,7 @@ All `robot` and `obstacle` entities in the simulation are configured as objects 
 
   - `'rvo'`: Implements Reciprocal Velocity Obstacles for collision avoidance among multiple moving objects. Support kinematics are `diff` and `omni`.
     - `wander` (bool/`False`): Whether to add random wandering to the movement. If `True`, the object will have a random goal when reach current goal.
+    - `loop` (bool/`False`): Whether to loop through waypoints continuously. If `True`, the object will restart from the first waypoint after reaching the last one.
     - `target_roles` (str/`all`): Only the objects with the target role will be applied to the behavior. Currently, you can set the target role as `robot` or `obstacle`.
     - `range_low`(list/`[0, 0, -3.14]`): Lower bounds for random wandering.
     - `range_high`(list/`[10, 10, 3.14]`): Upper bounds for random wandering.
@@ -859,12 +875,14 @@ All `robot` and `obstacle` entities in the simulation are configured as objects 
   - `show_goal_text` (bool/`False`): Whether to show the goal text.
 
   **Text Label Visualization:**
-  - `show_text` (bool/`False`): Whether to show text information.
+  - `show_text` (bool/`False`): Whether to show text information. By default, the object's abbreviation (e.g., `r0`, `o1`) is displayed. Custom text can be set at runtime via `object.set_text("custom label")`. Pass `None` to reset to the default abbreviation.
     - `text_color` (str): Color of the text. Default is 'k' (black).
     - `text_size` (int/`10`): Font size of the text.
     - `text_alpha` (float/`1.0`): Transparency of the text (0.0 to 1.0).
     - `text_zorder` (int/`2`): Z-order of the text.
     - `text_position` (list/`[-radius-0.1, radius+0.1]`): Position offset from object center [dx, dy].
+
+  Similarly, goal text can be customized via `object.set_goal_text("custom goal label")`.
 
   **Velocity Arrow Visualization:**
   - `show_arrow` (bool/`False`): Whether to show the velocity arrow.
@@ -1192,7 +1210,7 @@ robot:
 - **Multiple Objects**: When configuring multiple objects, use the `number` and `distribution` parameters to efficiently generate them. For instance, setting `number: 10` with a `distribution` of `'random'` can quickly populate the simulation with randomly placed objects. 
 - **Dictionary Parameters**: All dictionary-type parameters (e.g., `distribution`, `shape`, `kinematics`, `behavior`) must include a `'name'` key to specify their type. Omitting the `'name'` key will result in default values or errors.
 - **Group Configurations**: By default, objects within the same group share configurations. To customize individual objects within a group, add sub-parameters using `-`. Unspecified objects will inherit the last defined configuration within the group.
-- **Kinematics and Velocities**: Ensure that the `velocity` and `vel_max` parameters match the kinematics model. For example, a differential drive robot (`'diff'`) should have velocities in `[v, omega]`, while an omnidirectional robot (`'omni'`) uses `[vx, vy]`.
+- **Kinematics and Velocities**: Ensure that the `velocity` and `vel_max` parameters match the kinematics model. For example, a differential drive robot (`'diff'`) uses `[v, omega]`, an omnidirectional robot (`'omni'`) uses body-frame `[forward, lateral]`, and `'omni_angular'` uses `[forward, lateral, yaw_rate]`.
 - **Plotting Options**: Customize the visualization of your simulation through the `plot` parameter for each object if the `plot` section is located in the object configuration. If it is located in the root of the object configuration, it will be applied to all objects.
 ````
 

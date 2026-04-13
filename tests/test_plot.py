@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pytest
 
+import irsim.env.env_plot as env_plot_module
 from irsim.env.env_plot import EnvPlot, draw_patch
 from irsim.env.env_plot3d import EnvPlot3D
 
@@ -295,14 +296,14 @@ class TestDrawPatch:
 class TestGoalText:
     """Tests for goal abbreviation text rendering."""
 
-    def test_goal_abbr_text_update(self, env_factory):
+    def test__goal_text_update(self, env_factory):
         """Test goal abbreviation text position and property updates."""
         env = env_factory("test_all_objects.yaml")
         robot = env.robot
         robot.set_goal([8, 8, 0])
 
         mock_text = Mock()
-        robot.goal_abbr_text = mock_text
+        robot._goal_text = mock_text
 
         robot._step_plot(text_color="red", text_size=12, text_alpha=0.8, text_zorder=10)
 
@@ -312,7 +313,7 @@ class TestGoalText:
         mock_text.set_alpha.assert_called_with(0.8)
         mock_text.set_zorder.assert_called_with(10)
 
-    def test_goal_abbr_text_creation(self, env_factory):
+    def test__goal_text_creation(self, env_factory):
         """Test goal abbreviation text is created during plot_object."""
         env = env_factory("test_all_objects.yaml")
         robot = env.robot
@@ -326,8 +327,8 @@ class TestGoalText:
             ax, text_color="blue", text_size=10, text_alpha=0.5, text_zorder=5
         )
 
-        assert hasattr(robot, "goal_abbr_text")
-        assert robot.goal_abbr_text is not None
+        assert hasattr(robot, "_goal_text")
+        assert robot._goal_text is not None
         plt.close(fig)
 
 
@@ -421,3 +422,267 @@ class TestDrawMethods:
         """Test setting plot title."""
         env = env_factory("test_collision_avoidance.yaml", full=True)
         env.set_title(f"Simulation time: {env.time:.2f}s")
+
+
+# ---------------------------------------------------------------------------
+# Coverage-targeted tests for env_plot.py
+# ---------------------------------------------------------------------------
+
+
+class TestSetPatchProperty:
+    """Tests for set_patch_property kwargs (lines 831, 841, 905-908)."""
+
+    def test_set_patch_property_fill_and_linewidth(self, dummy_world_2d, dummy_logger):
+        """set_patch_property with fill and linewidth kwargs."""
+        from irsim.env.env_plot import draw_patch, set_patch_property
+
+        plot = EnvPlot(
+            dummy_world_2d,
+            objects=[],
+            saved_figure={},
+            figure_pixels=[200, 150],
+            show_title=False,
+        )
+        state = np.array([[0.0], [0.0], [0.0]])
+        circ = draw_patch(plot.ax, "circle", state=state, radius=1.0, color="k")
+        set_patch_property(
+            circ,
+            plot.ax,
+            state=state,
+            fill=True,
+            linewidth=2.0,
+            linestyle="--",
+            alpha=0.5,
+            zorder=3,
+        )
+        plt.close("all")
+
+
+class TestStepObjectsPlotInvalidMode:
+    """Tests for step_objects_plot and draw_components with invalid mode (lines 183, 187, 209)."""
+
+    def test_step_objects_plot_invalid_mode(self, dummy_world_2d, dummy_logger):
+        """step_objects_plot with invalid mode logs error (line 187)."""
+        plot = EnvPlot(
+            dummy_world_2d,
+            objects=[],
+            saved_figure={},
+            figure_pixels=[200, 150],
+            show_title=False,
+        )
+        plot.step_objects_plot(mode="invalid_mode", objects=[])
+        plt.close("all")
+
+    def test_draw_components_invalid_mode(self, dummy_world_2d, dummy_logger):
+        """draw_components with invalid mode logs error (line 209)."""
+        plot = EnvPlot(
+            dummy_world_2d,
+            objects=[],
+            saved_figure={},
+            figure_pixels=[200, 150],
+            show_title=False,
+        )
+        plot.draw_components(mode="invalid_mode", objects=[])
+        plt.close("all")
+
+
+class TestDrawPatchLineWithAlphaFill:
+    """Tests for draw_patch line shape with fill and alpha kwargs (lines 831, 841)."""
+
+    def test_draw_line_with_fill_and_alpha(self, dummy_world_2d, dummy_logger):
+        """draw_patch line with alpha (line 841)."""
+        plot = EnvPlot(
+            dummy_world_2d,
+            objects=[],
+            saved_figure={},
+            figure_pixels=[200, 150],
+            show_title=False,
+        )
+        line_vertices = np.array([[0.0, 1.0], [0.0, 1.0]])
+        line = draw_patch(
+            plot.ax,
+            "line",
+            vertices=line_vertices,
+            color="k",
+            alpha=0.5,
+            linestyle="--",
+        )
+        assert line is not None
+        plt.close("all")
+
+
+class TestSaveAnimate:
+    """Tests for animation saving behavior (GIF/MP4 and cleanup)."""
+
+    @staticmethod
+    def _create_dummy_frames(buffer_dir, n_frames=3):
+        buffer_dir.mkdir(parents=True, exist_ok=True)
+        for idx in range(1, n_frames + 1):
+            (buffer_dir / f"frame_{idx:04d}.png").write_bytes(b"png")
+
+    def test_save_animate_gif(self, dummy_world_2d, dummy_logger, tmp_path):
+        """Test saving GIF animation from buffered frames."""
+        plot = EnvPlot(
+            dummy_world_2d,
+            objects=[],
+            saved_figure={},
+            figure_pixels=[200, 150],
+            show_title=False,
+        )
+
+        ani_dir = tmp_path / "animations"
+        buffer_dir = tmp_path / "buffer"
+        self._create_dummy_frames(buffer_dir, n_frames=3)
+
+        writer = Mock()
+        context_manager = Mock()
+        context_manager.__enter__ = Mock(return_value=writer)
+        context_manager.__exit__ = Mock(return_value=False)
+
+        get_writer_mock = Mock(return_value=context_manager)
+        imread_mock = Mock(return_value=np.zeros((4, 4, 3), dtype=np.uint8))
+        original_ani_path = env_plot_module.pm.ani_path
+        original_ani_buffer_path = env_plot_module.pm.ani_buffer_path
+        original_get_writer = env_plot_module.imageio.get_writer
+        original_imread = env_plot_module.imageio.imread
+
+        try:
+            env_plot_module.pm.ani_path = str(ani_dir)
+            env_plot_module.pm.ani_buffer_path = str(buffer_dir)
+            env_plot_module.imageio.get_writer = get_writer_mock
+            env_plot_module.imageio.imread = imread_mock
+
+            plot.save_animate(
+                ani_name="gif_test",
+                suffix=".gif",
+                last_frame_duration=2,
+                rm_fig_path=False,
+            )
+        finally:
+            env_plot_module.pm.ani_path = original_ani_path
+            env_plot_module.pm.ani_buffer_path = original_ani_buffer_path
+            env_plot_module.imageio.get_writer = original_get_writer
+            env_plot_module.imageio.imread = original_imread
+
+        assert get_writer_mock.call_count == 1
+        assert writer.append_data.call_count == 3
+        assert buffer_dir.exists()
+
+    def test_save_animate_mp4(self, dummy_world_2d, dummy_logger, tmp_path):
+        """Test saving MP4 animation from buffered frames."""
+        plot = EnvPlot(
+            dummy_world_2d,
+            objects=[],
+            saved_figure={},
+            figure_pixels=[200, 150],
+            show_title=False,
+        )
+
+        ani_dir = tmp_path / "animations"
+        buffer_dir = tmp_path / "buffer"
+        self._create_dummy_frames(buffer_dir, n_frames=2)
+
+        writer = Mock()
+        context_manager = Mock()
+        context_manager.__enter__ = Mock(return_value=writer)
+        context_manager.__exit__ = Mock(return_value=False)
+
+        get_writer_mock = Mock(return_value=context_manager)
+        imread_mock = Mock(return_value=np.zeros((4, 4, 3), dtype=np.uint8))
+        original_ani_path = env_plot_module.pm.ani_path
+        original_ani_buffer_path = env_plot_module.pm.ani_buffer_path
+        original_get_writer = env_plot_module.imageio.get_writer
+        original_imread = env_plot_module.imageio.imread
+
+        try:
+            env_plot_module.pm.ani_path = str(ani_dir)
+            env_plot_module.pm.ani_buffer_path = str(buffer_dir)
+            env_plot_module.imageio.get_writer = get_writer_mock
+            env_plot_module.imageio.imread = imread_mock
+
+            plot.save_animate(
+                ani_name="mp4_test",
+                suffix=".mp4",
+                fps=7,
+                rm_fig_path=False,
+            )
+        finally:
+            env_plot_module.pm.ani_path = original_ani_path
+            env_plot_module.pm.ani_buffer_path = original_ani_buffer_path
+            env_plot_module.imageio.get_writer = original_get_writer
+            env_plot_module.imageio.imread = original_imread
+
+        assert get_writer_mock.call_count == 1
+        assert writer.append_data.call_count == 2
+
+    def test_save_animate_empty_buffer(self, dummy_world_2d, dummy_logger, tmp_path):
+        """Test save_animate with an empty frame buffer."""
+        plot = EnvPlot(
+            dummy_world_2d,
+            objects=[],
+            saved_figure={},
+            figure_pixels=[200, 150],
+            show_title=False,
+        )
+
+        ani_dir = tmp_path / "animations"
+        buffer_dir = tmp_path / "buffer"
+        buffer_dir.mkdir(parents=True, exist_ok=True)
+
+        get_writer_mock = Mock()
+        original_ani_path = env_plot_module.pm.ani_path
+        original_ani_buffer_path = env_plot_module.pm.ani_buffer_path
+        original_get_writer = env_plot_module.imageio.get_writer
+
+        try:
+            env_plot_module.pm.ani_path = str(ani_dir)
+            env_plot_module.pm.ani_buffer_path = str(buffer_dir)
+            env_plot_module.imageio.get_writer = get_writer_mock
+
+            plot.save_animate(ani_name="no_images", suffix=".gif")
+        finally:
+            env_plot_module.pm.ani_path = original_ani_path
+            env_plot_module.pm.ani_buffer_path = original_ani_buffer_path
+            env_plot_module.imageio.get_writer = original_get_writer
+
+        get_writer_mock.assert_not_called()
+
+    def test_save_animate_remove_buffer(self, dummy_world_2d, dummy_logger, tmp_path):
+        """Test frame buffer cleanup after animation save."""
+        plot = EnvPlot(
+            dummy_world_2d,
+            objects=[],
+            saved_figure={},
+            figure_pixels=[200, 150],
+            show_title=False,
+        )
+
+        ani_dir = tmp_path / "animations"
+        buffer_dir = tmp_path / "buffer"
+        self._create_dummy_frames(buffer_dir, n_frames=1)
+
+        writer = Mock()
+        context_manager = Mock()
+        context_manager.__enter__ = Mock(return_value=writer)
+        context_manager.__exit__ = Mock(return_value=False)
+        get_writer_mock = Mock(return_value=context_manager)
+        imread_mock = Mock(return_value=np.zeros((4, 4, 3), dtype=np.uint8))
+        original_ani_path = env_plot_module.pm.ani_path
+        original_ani_buffer_path = env_plot_module.pm.ani_buffer_path
+        original_get_writer = env_plot_module.imageio.get_writer
+        original_imread = env_plot_module.imageio.imread
+
+        try:
+            env_plot_module.pm.ani_path = str(ani_dir)
+            env_plot_module.pm.ani_buffer_path = str(buffer_dir)
+            env_plot_module.imageio.get_writer = get_writer_mock
+            env_plot_module.imageio.imread = imread_mock
+
+            plot.save_animate(ani_name="cleanup_test", suffix=".gif", rm_fig_path=True)
+        finally:
+            env_plot_module.pm.ani_path = original_ani_path
+            env_plot_module.pm.ani_buffer_path = original_ani_buffer_path
+            env_plot_module.imageio.get_writer = original_get_writer
+            env_plot_module.imageio.imread = original_imread
+
+        assert not buffer_dir.exists()

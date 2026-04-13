@@ -1,3 +1,87 @@
+# Changelog
+
+## 2.9.3
+
+- Features:
+  - Add loop mode for waypoint navigation behavior. ([#266](https://github.com/hanruihua/ir-sim/pull/266))
+  - Add line obstacle support to RVO algorithm. ([#250](https://github.com/hanruihua/ir-sim/pull/250))
+  - Add CBF-QP and collision-cone usage examples. ([#258](https://github.com/hanruihua/ir-sim/pull/258)) (@Lawliet9666)
+
+- Performance:
+  - Vectorize lidar range/origin filter and skip `union_all`, ~48% faster lidar step on map-based arenas. ([#257](https://github.com/hanruihua/ir-sim/pull/257)) (@williamleong)
+  - Use STRtree intersects predicate for lidar map segment filtering, ~26% faster lidar step on PNG-map arenas. ([#255](https://github.com/hanruihua/ir-sim/pull/255)) (@williamleong)
+  - Cache geometry validity and streamline lidar map ray intersection, ~18% faster lidar step on PNG-map arenas. ([#254](https://github.com/hanruihua/ir-sim/pull/254)) (@williamleong)
+
+- Fix:
+  - Prevent infinite loop in `WrapToPi`/`WrapTo2Pi` for non-finite inputs. ([#269](https://github.com/hanruihua/ir-sim/pull/269))
+
+- Refactor:
+  - Simplify `file_check` and `find_file` in util. ([#256](https://github.com/hanruihua/ir-sim/pull/256))
+
+## 2.9.2
+
+- Features:
+  - Add `env.create_robot()` and `env.create_obstacle()` for programmatic object creation, and `env.add_object()` / `env.add_objects()` for adding them at runtime. ([#251](https://github.com/hanruihua/ir-sim/pull/251))
+  - Add `check_arrive()` method to check if an object has reached a given goal, and initialize plot for dynamically added objects. ([#240](https://github.com/hanruihua/ir-sim/pull/240))
+  - Add `set_text()` and `set_goal_text()` API for setting custom text on objects and goals. ([#239](https://github.com/hanruihua/ir-sim/pull/239))
+  - Add typo detection and suggestions for invalid YAML configuration keys. ([#227](https://github.com/hanruihua/ir-sim/pull/227))
+
+- Refactor:
+  - Centralize kinematics metadata (default color, state_dim, description) in the handler registry to make the kinematics be added more easily. ([#237](https://github.com/hanruihua/ir-sim/pull/237))
+
+- Fix:
+  - Improve robustness of save animation by reading and saving frames one by one instead of loading all images into memory. ([#230](https://github.com/hanruihua/ir-sim/pull/230)) (@williamleong)
+
+- Docs:
+  - Add "Dynamic Object Management" section to the Make Environment documentation. ([#251](https://github.com/hanruihua/ir-sim/pull/251))
+  - Fix and update Chinese translations.
+
+## 2.9.1
+
+- Features:
+  - Add Perlin noise and image-based grid map generators, new JPS (Jump Point Search) and Informed RRT* path planners, and refactor existing planners (A*, RRT, RRT*, PRM) to use the `EnvGridMap` protocol. #215 (@KevinLADLee)
+  - Drop Python 3.9 support, add Python 3.14 support. Raise minimum Python version to 3.10, modernize type annotations (`Optional`/`Union` to `X | Y` syntax). #216
+  - Add optional `reload` parameter to `set_random_seed()` that regenerates random obstacles with the new seed when set to `True`. #210
+  - Default animation filename to the world name when not explicitly specified. #221
+
+- Fix:
+  - Add grid-based collision detection for obstacle maps using grid array lookup for faster detection, cache STRtree in `ObstacleMap`. #205
+
+- Refactor:
+  - Add input validation decorators (`validate_shape`, `validate_length`, `ensure_column_vector`, `ensure_numpy`) for kinematics and utility functions. #209
+
+- Docs:
+  - Refine README. #222
+  - Add grid map configuration and path planning documentation. #215
+
+## 2.9.0
+
+Assistant by claude code, this version adds multi-environment support with instance-based parameters, allowing multiple independent simulation environments to run simultaneously. It also introduces 1D ToF sensor support and keyboard improvements.
+
+- Features:
+  - Add 1D ToF (Time-of-Flight) sensor support by setting lidar2d sensor `number: 1` and `angle_range: 0`. ([#200](https://github.com/hanruihua/ir-sim/pull/200))
+  - Add multi-environment keyboard switching support. Only one environment responds to keyboard input at a time; switching occurs via mouse click or focus events. ([#192](https://github.com/hanruihua/ir-sim/pull/192))
+  - Add `y` key to toggle display render window on/off. ([#194](https://github.com/hanruihua/ir-sim/pull/194))
+
+- Refactor:
+  - Environment parameters (`env_param`, `world_param`, `path_param`) are now instance-based rather than global, enabling proper multi-environment support. ([#191](https://github.com/hanruihua/ir-sim/pull/191))
+
+- Fix:
+  - Fix `robot` property to raise `IndexError` with clear message when no robots exist. ([#188](https://github.com/hanruihua/ir-sim/pull/188))
+  - Fix `save_figure` to handle filenames with multiple dots correctly. ([#188](https://github.com/hanruihua/ir-sim/pull/188))
+  - Fix type annotations for `get_group_by_name`, `get_obstacle_info_list`, `get_robot_info_list`, and `random_obstacle_position`. ([#188](https://github.com/hanruihua/ir-sim/pull/188))
+  - Fix `set_ax_viewpoint` to handle `None` objects parameter. ([#188](https://github.com/hanruihua/ir-sim/pull/188))
+  - Add `NotImplementedError` for 3D state generation and uniform distribution (not yet implemented). ([#188](https://github.com/hanruihua/ir-sim/pull/188))
+
+- Docs:
+  - Add changelog and contributing pages to documentation. ([#203](https://github.com/hanruihua/ir-sim/pull/203))
+  - Improve custom behavior tutorial and examples. ([#193](https://github.com/hanruihua/ir-sim/pull/193))
+  - Fix formatting issues in documentation. ([#190](https://github.com/hanruihua/ir-sim/pull/190))
+
+- Tests:
+  - Refactor and improve test coverage from 94% to 97%. ([#189](https://github.com/hanruihua/ir-sim/pull/189))
+  - Add tests for multi-env keyboard switching and display toggle.
+
 ## 2.8.2
 
 - Features #183:

@@ -2,8 +2,8 @@ import itertools
 import math
 from collections import deque
 from dataclasses import dataclass
-from math import atan2, cos, inf, pi, sin
-from typing import Any, Optional, Union
+from math import cos, pi, sin
+from typing import Any, ClassVar
 
 import matplotlib.transforms as mtransforms
 import numpy as np
@@ -11,9 +11,7 @@ import shapely
 from matplotlib import image
 from matplotlib.patches import Arrow, Circle, Wedge
 from mpl_toolkits.mplot3d import Axes3D
-from shapely.geometry import MultiLineString
 from shapely.geometry.base import BaseGeometry
-from shapely.strtree import STRtree
 
 from irsim.config.path_param import path_manager
 from irsim.env.env_plot import draw_patch, linewidth_from_data_units, set_patch_property
@@ -22,7 +20,7 @@ from irsim.util.util import (
     WrapTo2Pi,
     WrapToPi,
     WrapToRegion,
-    diff_to_omni,
+    check_unknown_kwargs,
     file_check,
     is_2d_list,
     random_point_range,
@@ -176,34 +174,67 @@ class ObjectBase:
     vel_shape = (2, 1)
     state_shape = (3, 1)
 
+    _VALID_PARAMS: ClassVar[set[str]] = {
+        "shape",
+        "kinematics",
+        "state",
+        "velocity",
+        "goal",
+        "role",
+        "color",
+        "static",
+        "vel_min",
+        "vel_max",
+        "acce",
+        "angle_range",
+        "behavior",
+        "group_behavior",
+        "goal_threshold",
+        "sensors",
+        "arrive_mode",
+        "description",
+        "group",
+        "group_name",
+        "state_dim",
+        "vel_dim",
+        "unobstructed",
+        "fov",
+        "fov_radius",
+        "name",
+        "plot",
+        # consumed by ObjectFactory before reaching __init__
+        "number",
+        "distribution",
+    }
+
     def __init__(
         self,
-        shape: Optional[dict] = None,
-        kinematics: Optional[dict] = None,
-        state: Optional[list] = None,
-        velocity: Optional[list] = None,
-        goal: Optional[list] = None,
+        shape: dict | None = None,
+        kinematics: dict | None = None,
+        state: list | None = None,
+        velocity: list | None = None,
+        goal: list | None = None,
         role: str = "obstacle",
         color: str = "k",
         static: bool = False,
-        vel_min: Optional[list] = None,
-        vel_max: Optional[list] = None,
-        acce: Optional[list] = None,
-        angle_range: Optional[list] = None,
-        behavior: Optional[dict] = None,
-        group_behavior: Optional[dict] = None,
+        vel_min: list | None = None,
+        vel_max: list | None = None,
+        acce: list | None = None,
+        angle_range: list | None = None,
+        behavior: dict | None = None,
+        group_behavior: dict | None = None,
         goal_threshold: float = 0.1,
-        sensors: Optional[dict] = None,
+        sensors: dict | None = None,
         arrive_mode: str = "position",
-        description: Optional[str] = None,
+        description: str | None = None,
         group: int = 0,
-        group_name: Optional[str] = None,
-        state_dim: Optional[int] = None,
-        vel_dim: Optional[int] = None,
+        group_name: str | None = None,
+        state_dim: int | None = None,
+        vel_dim: int | None = None,
         unobstructed: bool = False,
-        fov: Optional[float] = None,
-        fov_radius: Optional[float] = None,
-        name: Optional[str] = None,
+        fov: float | None = None,
+        fov_radius: float | None = None,
+        name: str | None = None,
         **kwargs,
     ) -> None:
         """
@@ -228,25 +259,17 @@ class ObjectBase:
                 if input parameters are invalid.
         """
 
-        if angle_range is None:
-            angle_range = [-pi, pi]
-        if acce is None:
-            acce = [inf, inf]
-        if vel_max is None:
-            vel_max = [1, 1]
-        if vel_min is None:
-            vel_min = [-1, -1]
-        if velocity is None:
-            velocity = [0, 0]
-        if state is None:
-            state = [0, 0, 0]
-
-        # Environment reference for accessing params (set by EnvBase after creation)
+        # --- 1. Identity ---
         self._env = None
-
         self._id = next(ObjectBase.id_iter)
+        self._name = name
+        self.role = role
+        self.group = group
+        self._group_name = group_name
+        self.description = description
+        self.color = color
 
-        # handlers
+        # --- 2. Geometry & kinematics handlers ---
         if shape is None:
             self.logger.warning(
                 f"No shape provided for object {self._id}, using default circle"
@@ -267,14 +290,33 @@ class ObjectBase:
         else:
             self.G, self.h, self.cone_type, self.convex_flag = None, None, None, None
 
+        # --- 3. Dimensions (derived from handlers) ---
+        action_dim = self.kf.action_dim if self.kf else 2
         self.state_dim = state_dim if state_dim is not None else self.state_shape[0]
         self.state_shape = (
             (self.state_dim, 1) if state_dim is not None else self.state_shape
         )
-        self.vel_dim = vel_dim if vel_dim is not None else self.vel_shape[0]
-        self.vel_shape = (self.vel_dim, 1) if vel_dim is not None else self.vel_shape
+        self.vel_dim = vel_dim if vel_dim is not None else action_dim
+        self.vel_shape = (self.vel_dim, 1)
 
-        self.role = role
+        # --- 4. Resolve defaults from kf ---
+        if angle_range is None:
+            angle_range = [-pi, pi]
+
+        if self.kf is not None:
+            acce = self.kf.acce if acce is None else acce
+            vel_max = self.kf.vel_max if vel_max is None else vel_max
+            vel_min = self.kf.vel_min if vel_min is None else vel_min
+        else:
+            acce = acce or [float("inf"), float("inf")]
+            vel_max = vel_max or [1, 1]
+            vel_min = vel_min or [-1, -1]
+
+        # --- 5. State & velocity ---
+        if state is None:
+            state = [0, 0, 0]
+        if velocity is None:
+            velocity = [0] * action_dim
 
         state = self.input_state_check(state, self.state_dim)
         self._state = np.c_[state]
@@ -283,9 +325,11 @@ class ObjectBase:
         self._velocity = np.c_[velocity]
         self._init_velocity = np.c_[velocity]
 
-        self._name = name
+        self.vel_min = np.c_[vel_min]
+        self.vel_max = np.c_[vel_max]
+        self.static = static if self.kf is not None else True
 
-        # Set goal points
+        # --- 6. Goal ---
         self._goal = (
             deque(goal)
             if goal is not None and is_2d_list(goal)
@@ -302,23 +346,16 @@ class ObjectBase:
         self._init_goal_vertices = (
             self._goal_vertices.copy() if self._goal_vertices is not None else None
         )
+        self.goal_threshold = goal_threshold
+        self.arrive_mode = arrive_mode
 
+        # --- 7. Geometry instance ---
         self._geometry = self.gf.step(self.state) if self.gf is not None else None
-        self.group = group
-        self._group_name = group_name
+        self._geometry_valid = (
+            shapely.is_valid(self._geometry) if self._geometry is not None else False
+        )
 
-        # flag
-        self.stop_flag = False
-        self.arrive_flag = False
-        self.collision_flag = False
-        self.unobstructed = unobstructed
-
-        # information
-        self.static = static if self.kf is not None else True
-        self.vel_min = np.c_[vel_min]
-        self.vel_max = np.c_[vel_max]
-        self.color = color
-
+        # --- 8. ObjectInfo ---
         self.info = ObjectInfo(
             self._id,
             self.shape,
@@ -327,8 +364,8 @@ class ObjectBase:
             color,
             static,
             np.c_[goal],
-            np.c_[vel_min],
-            np.c_[vel_max],
+            self.vel_min,
+            self.vel_max,
             np.c_[acce],
             np.c_[angle_range],
             goal_threshold,
@@ -339,18 +376,10 @@ class ObjectBase:
             self.convex_flag,
             self.name,
         )
-
         self.obstacle_info = None
-
         self.trajectory = []
 
-        self.description = description
-
-        # arrive judgement
-        self.goal_threshold = goal_threshold
-        self.arrive_mode = arrive_mode
-
-        # sensor
+        # --- 9. Sensors ---
         sf = SensorFactory()
         self.lidar = None
         if sensors is not None:
@@ -358,7 +387,6 @@ class ObjectBase:
                 sf.create_sensor(self._state[0:3], self._id, **sensor_kwargs)
                 for sensor_kwargs in sensors
             ]
-            # Set parent reference for sensors to access env_param
             for sensor in self.sensors:
                 sensor.parent = self
 
@@ -378,24 +406,43 @@ class ObjectBase:
             self.fov = WrapTo2Pi(fov)
             self.fov_radius = fov_radius
 
-        # behavior
+        # --- 10. Behavior ---
         self.obj_behavior = Behavior(self.info, behavior)
         self.group_behavior_dict = group_behavior if group_behavior is not None else {}
 
         self.rl = self.beh_config.get("range_low", [0, 0, -pi])
         self.rh = self.beh_config.get("range_high", [10, 10, pi])
         self.wander = self.beh_config.get("wander", False)
+        self.loop = self.beh_config.get("loop", False)
+
+        if self.wander and self.loop:
+            self.logger.warning(
+                f"Object {self.id}: Both 'wander' and 'loop' are enabled. "
+                "'wander' takes priority, 'loop' will be disabled."
+            )
+            self.loop = False
 
         if self.wander:
             self._goal = deque([random_point_range(self.rl, self.rh)])
 
-        # plot
+        # --- 11. Flags ---
+        self.stop_flag = False
+        self.arrive_flag = False
+        self.collision_flag = False
+        self.unobstructed = unobstructed
+
+        # --- 12. Plot state ---
         self.plot_kwargs = kwargs.get("plot", {})
         self.plot_patch_list = []
         self.plot_line_list = []
         self.plot_text_list = []
+        self._custom_text: str | None = None
+        self._custom_goal_text: str | None = None
         self.collision_obj = []
         self.plot_trail_list = []
+
+        # --- 13. Validate kwargs ---
+        check_unknown_kwargs(kwargs, self._VALID_PARAMS, context=f" in '{role}' config")
 
     def __eq__(self, o: "ObjectBase") -> bool:
         if isinstance(o, ObjectBase):
@@ -415,7 +462,7 @@ class ObjectBase:
 
     def step(
         self,
-        velocity: Optional[np.ndarray] = None,
+        velocity: np.ndarray | None = None,
         sensor_step: bool = True,
         **kwargs: Any,
     ):
@@ -458,6 +505,7 @@ class ObjectBase:
         self._state = next_state
         self._velocity = behavior_vel
         self._geometry = self.gf.step(self.state)
+        self._geometry_valid = shapely.is_valid(self._geometry)
 
         if sensor_step:
             self.sensor_step()
@@ -515,24 +563,44 @@ class ObjectBase:
         Updates the arrive_flag and handles multiple goals by removing completed ones.
         """
 
-        if self.goal is None:
-            self.arrive_flag = False
-            return
-
-        if self.arrive_mode == "state":
-            diff = np.linalg.norm(self.state[:3] - self.goal[:3])
-        elif self.arrive_mode == "position":
-            diff = np.linalg.norm(self.state[:2] - self.goal[:2])
-
-        if diff < self.goal_threshold:
+        if self.check_arrive(self.goal):
             if len(self._goal) == 1:
                 self.arrive_flag = True
-
             else:
                 self._goal.popleft()
                 self.arrive_flag = False
         else:
             self.arrive_flag = False
+
+    def check_arrive(self, goal, threshold=None):
+        """
+        Check if the object has arrived at a given goal.
+
+        Args:
+            goal (np.ndarray): Goal state to check arrival against.
+            threshold (float, optional): Distance threshold for arrival.
+                Defaults to self.goal_threshold if not provided.
+
+        Returns:
+            bool: True if the object is within the threshold, False otherwise.
+        """
+        if goal is None:
+            return False
+
+        if threshold is None:
+            threshold = self.goal_threshold
+
+        if self.arrive_mode == "state":
+            diff = np.linalg.norm(self.state[:3] - goal[:3])
+        elif self.arrive_mode == "position":
+            diff = np.linalg.norm(self.state[:2] - goal[:2])
+        else:
+            raise ValueError(
+                f"Unsupported arrive_mode '{self.arrive_mode}'. "
+                "Supported modes are 'state' and 'position'."
+            )
+
+        return diff < threshold
 
     def check_collision_status(self):
         """
@@ -571,17 +639,11 @@ class ObjectBase:
         """
 
         if obj.shape == "map":
-            line_strings = list(obj._geometry.geoms)
-            tree = STRtree(line_strings)
-            candidate_indices = tree.query(self.geometry)
-            filtered_lines = [line_strings[i] for i in candidate_indices]
-            filtered_multi_line = MultiLineString(filtered_lines)
-
-            return shapely.intersects(self.geometry, filtered_multi_line)
+            return obj.is_collision(self.geometry)
 
         return shapely.intersects(self.geometry, obj._geometry)
 
-    def gen_behavior_vel(self, velocity: Optional[np.ndarray] = None) -> np.ndarray:
+    def gen_behavior_vel(self, velocity: np.ndarray | None = None) -> np.ndarray:
         """
         Generate behavior-influenced velocity for the object.
 
@@ -645,10 +707,22 @@ class ObjectBase:
         Default behavior:
             - If `wander` is enabled and the object has just arrived (`arrive_flag`),
               sample a new random goal within [`rl`, `rh`] and clear `arrive_flag`.
+            - If `loop` is enabled and the object has just arrived (`arrive_flag`),
+              reset goals to initial waypoints and clear `arrive_flag`.
         """
 
         if self.wander and self.arrive_flag:
             self._goal = deque([random_point_range(self.rl, self.rh)])
+            self.arrive_flag = False
+
+        if self.loop and self.arrive_flag and self._init_goal:
+            if len(self._init_goal) > 1:
+                self._goal = self._init_goal.copy()
+            else:
+                # Single goal: cycle between start position and goal
+                start_pos = self._init_state[0:2, 0].tolist()
+                goal_pos = self._init_goal[0][0:2]
+                self._goal = deque([goal_pos, start_pos])
             self.arrive_flag = False
 
     def post_process(self):
@@ -765,9 +839,7 @@ class ObjectBase:
             fov_diff <= self.fov / 2 and distance_do - radius_do <= self.fov_radius
         )
 
-    def set_state(
-        self, state: Optional[Union[list, np.ndarray]] = None, init: bool = False
-    ):
+    def set_state(self, state: list | np.ndarray | None = None, init: bool = False):
         """
         Set the current state of the object.
 
@@ -807,9 +879,10 @@ class ObjectBase:
 
         self._state = temp_state.copy()
         self._geometry = self.gf.step(self.state)
+        self._geometry_valid = shapely.is_valid(self._geometry)
 
     def set_velocity(
-        self, velocity: Optional[Union[list, np.ndarray]] = None, init: bool = False
+        self, velocity: list | np.ndarray | None = None, init: bool = False
     ) -> None:
         """
         Set the velocity of the object.
@@ -844,7 +917,7 @@ class ObjectBase:
         init: bool = False,
         free: bool = True,
         goal_check_radius: float = 0.2,
-        range_limits: Optional[list] = None,
+        range_limits: list | None = None,
         max_attempts: int = 100,
     ):
         """
@@ -887,9 +960,7 @@ class ObjectBase:
 
         self.set_goal(deque_goals, init=init)
 
-    def set_goal(
-        self, goal: Optional[Union[list, np.ndarray]] = None, init: bool = False
-    ):
+    def set_goal(self, goal: list | np.ndarray | None = None, init: bool = False):
         """
         Set the goal(s) for the object to navigate towards.
 
@@ -964,7 +1035,7 @@ class ObjectBase:
 
         self._goal = goal_deque
 
-    def append_goal(self, goal: Union[list, np.ndarray]):
+    def append_goal(self, goal: list | np.ndarray):
         """
         Append a goal to the goal list.
         """
@@ -1021,8 +1092,8 @@ class ObjectBase:
     def plot(
         self,
         ax,
-        state: Optional[np.ndarray] = None,
-        vertices: Optional[np.ndarray] = None,
+        state: np.ndarray | None = None,
+        vertices: np.ndarray | None = None,
         **kwargs,
     ):
         """
@@ -1049,6 +1120,13 @@ class ObjectBase:
         Returns:
             list: Names of plot attributes created (e.g., 'object_patch', 'goal_patch').
         """
+        # Apply handler-derived show_arrow default when not explicitly set
+        if (
+            self.kf is not None
+            and "show_arrow" not in self.plot_kwargs
+            and "show_arrow" not in kwargs
+        ):
+            kwargs.setdefault("show_arrow", self.kf.show_arrow)
         return self._plot(
             ax, self.original_state, self.original_vertices, initial=True, **kwargs
         )
@@ -1107,8 +1185,8 @@ class ObjectBase:
             - object_line: Object outline for linestring shapes (line)
             - object_img: Object image for description-based visualization
             - goal_patch: Goal position marker (patch)
-            - abbr_text: Object abbreviation text label
-            - goal_abbr_text: Goal abbreviation text label
+            - _text: Object text label
+            - _goal_text: Goal text label
             - arrow_patch: Velocity direction arrow (patch)
             - trajectory_line: Trajectory path visualization (line)
             - fov_patch: Field of view visualization (patch)
@@ -1122,8 +1200,8 @@ class ObjectBase:
             "object_line",
             "object_img",
             "goal_patch",
-            "abbr_text",
-            "goal_abbr_text",
+            "_text",
+            "_goal_text",
             "arrow_patch",
             "trajectory_line",
             "fov_patch",
@@ -1157,7 +1235,10 @@ class ObjectBase:
 
         if show_arrow:
             current_velocity = self.velocity_xy if np.any(state) else np.zeros((2, 1))
-            self.plot_arrow(ax, state, current_velocity, **self.plot_kwargs)
+            arrow_theta = 0.0 if initial else self.heading
+            self.plot_arrow(
+                ax, state, current_velocity, arrow_theta, **self.plot_kwargs
+            )
 
         if show_trajectory:
             trajectory_data = self.trajectory if np.any(state) else []
@@ -1187,7 +1268,7 @@ class ObjectBase:
         Update methods by element type:
         - Patches (object_patch, goal_patch, arrow_patch, fov_patch): Updated using matplotlib transforms
         - Lines (object_line, trajectory_line): Updated using set_data method
-        - Text (abbr_text): Updated using set_position method
+        - Text (_text): Updated using set_position method
         - Images (object_img): Updated using extent and transform methods
 
         Args:
@@ -1342,11 +1423,7 @@ class ObjectBase:
                     # Update arrow patch using set_element_property
                     if isinstance(element, Arrow):
                         # Calculate orientation for arrow direction
-                        theta = (
-                            atan2(self.velocity_xy[1, 0], self.velocity_xy[0, 0])
-                            if self.kinematics == "omni"
-                            else r_phi
-                        )
+                        theta = self.heading
 
                         arrow_state = np.array([[x], [y], [theta]])
 
@@ -1400,7 +1477,7 @@ class ObjectBase:
 
                 elif attr == "fov_patch":
                     # Update FOV patch using set_element_property
-                    if isinstance(element, (Wedge, Circle)):
+                    if isinstance(element, Wedge | Circle):
                         direction = r_phi if self.state_dim >= 3 else 0
                         fov_state = np.array([[x], [y], [direction]])
 
@@ -1414,8 +1491,8 @@ class ObjectBase:
                         )
 
         # Update text position using set_position (works for both 2D and 3D)
-        if hasattr(self, "abbr_text"):
-            text = self.abbr_text
+        if hasattr(self, "_text"):
+            text = self._text
             # Prefer runtime kwargs, then initial plot kwargs, fallback to default
             default_text_pos = [-self.radius - 0.1, self.radius + 0.1]
             text_position = kwargs.get(
@@ -1424,6 +1501,9 @@ class ObjectBase:
             )
 
             text.set_position((x + text_position[0], y + text_position[1]))
+
+            # Sync display text (may have been changed via set_text)
+            text.set_text(self._get_text())
 
             # Update text properties
             if "text_color" in kwargs:
@@ -1442,8 +1522,8 @@ class ObjectBase:
         if self.goal is not None:
             goal_x = self.goal[0, 0]
             goal_y = self.goal[1, 0]
-            if hasattr(self, "goal_abbr_text"):
-                goal_text = self.goal_abbr_text
+            if hasattr(self, "_goal_text"):
+                goal_text = self._goal_text
                 # Prefer runtime kwargs, then initial plot kwargs, fallback to default
                 default_text_pos = [-self.radius - 0.1, self.radius + 0.1]
                 text_position = kwargs.get(
@@ -1483,6 +1563,9 @@ class ObjectBase:
                     (goal_x + text_position[0], goal_y + text_position[1])
                 )
 
+                # Sync goal display text (may have been changed via set_goal_text)
+                goal_text.set_text(self._get_goal_text())
+
                 # Update text properties
                 if "text_color" in kwargs:
                     goal_text.set_color(kwargs["text_color"])
@@ -1509,8 +1592,8 @@ class ObjectBase:
     def plot_object(
         self,
         ax,
-        state: Optional[np.ndarray] = None,
-        vertices: Optional[np.ndarray] = None,
+        state: np.ndarray | None = None,
+        vertices: np.ndarray | None = None,
         **kwargs,
     ):
         """
@@ -1567,9 +1650,9 @@ class ObjectBase:
     def plot_object_image(
         self,
         ax,
-        state: Optional[np.ndarray] = None,
-        vertices: Optional[np.ndarray] = None,
-        description: Optional[str] = None,
+        state: np.ndarray | None = None,
+        vertices: np.ndarray | None = None,
+        description: str | None = None,
         **kwargs,
     ):
         """
@@ -1623,7 +1706,7 @@ class ObjectBase:
         self.object_img = robot_img
 
     def plot_trajectory(
-        self, ax, trajectory: Optional[list] = None, keep_traj_length: int = 0, **kwargs
+        self, ax, trajectory: list | None = None, keep_traj_length: int = 0, **kwargs
     ):
         """
         Plot the trajectory path of the object using the specified trajectory data.
@@ -1680,11 +1763,11 @@ class ObjectBase:
     def plot_goal(
         self,
         ax,
-        goal_state: Optional[np.ndarray] = None,
-        vertices: Optional[np.ndarray] = None,
-        goal_color: Optional[str] = None,
-        goal_zorder: Optional[int] = 1,
-        goal_alpha: Optional[float] = 0.5,
+        goal_state: np.ndarray | None = None,
+        vertices: np.ndarray | None = None,
+        goal_color: str | None = None,
+        goal_zorder: int | None = 1,
+        goal_alpha: float | None = 0.5,
         **kwargs,
     ):
         """
@@ -1719,7 +1802,7 @@ class ObjectBase:
 
         self.plot_patch_list.append(self.goal_patch)
 
-    def plot_text(self, ax, state: Optional[np.ndarray] = None, **kwargs):
+    def plot_text(self, ax, state: np.ndarray | None = None, **kwargs):
         """
         Plot the text label of the object at the specified position.
 
@@ -1754,52 +1837,52 @@ class ObjectBase:
         x, y = state[0, 0], state[1, 0]
 
         if isinstance(ax, Axes3D):
-            self.abbr_text = ax.text(
+            self._text = ax.text(
                 x + text_position[0],
                 y + text_position[1],
                 self.z,
-                self.abbr,
+                self._get_text(),
                 fontsize=text_size,
                 color=text_color,
                 zorder=text_zorder,
                 alpha=text_alpha,
             )
         else:
-            self.abbr_text = ax.text(
+            self._text = ax.text(
                 x + text_position[0],
                 y + text_position[1],
-                self.abbr,
+                self._get_text(),
                 fontsize=text_size,
                 color=text_color,
                 zorder=text_zorder,
                 alpha=text_alpha,
             )
-        self.plot_text_list.append(self.abbr_text)
+        self.plot_text_list.append(self._text)
 
         if self.show_goal and self.show_goal_text:
             goal_x, goal_y = self.goal[0, 0], self.goal[1, 0]
             if isinstance(ax, Axes3D):
-                self.goal_abbr_text = ax.text(
+                self._goal_text = ax.text(
                     goal_x + text_position[0],
                     goal_y + text_position[1],
                     self.z,
-                    self.goal_abbr,
+                    self._get_goal_text(),
                     fontsize=text_size,
                     color=text_color,
                     zorder=text_zorder,
                     alpha=text_alpha,
                 )
             else:
-                self.goal_abbr_text = ax.text(
+                self._goal_text = ax.text(
                     goal_x + text_position[0],
                     goal_y + text_position[1],
-                    self.goal_abbr,
+                    self._get_goal_text(),
                     fontsize=text_size,
                     color=text_color,
                     zorder=text_zorder,
                     alpha=text_alpha,
                 )
-            self.plot_text_list.append(self.goal_abbr_text)
+            self.plot_text_list.append(self._goal_text)
 
 
 
@@ -1831,11 +1914,12 @@ class ObjectBase:
     def plot_arrow(
         self,
         ax,
-        state: Optional[np.ndarray] = None,
-        velocity: Optional[np.ndarray] = None,
+        state: np.ndarray | None = None,
+        velocity: np.ndarray | None = None,
+        arrow_theta: float | None = 0.0,
         arrow_length: float = 0.4,
         arrow_width: float = 0.6,
-        arrow_color: Optional[str] = None,
+        arrow_color: str | None = None,
         arrow_zorder: int = 3,
         **kwargs,
     ):
@@ -1861,12 +1945,6 @@ class ObjectBase:
         if arrow_color is None:
             arrow_color = "gold"
 
-        theta = (
-            atan2(velocity[1, 0], velocity[0, 0])
-            if self.kinematics == "omni" and velocity is not None
-            else state[2, 0]
-        )
-
         self.arrow_patch = draw_patch(
             ax,
             shape="arrow",
@@ -1875,7 +1953,7 @@ class ObjectBase:
             zorder=arrow_zorder,
             arrow_length=arrow_length,
             arrow_width=arrow_width,
-            theta=theta,
+            theta=arrow_theta,
         )
 
         self.plot_patch_list.append(self.arrow_patch)
@@ -1883,8 +1961,8 @@ class ObjectBase:
     def plot_trail(
         self,
         ax,
-        state: Optional[np.ndarray] = None,
-        vertices: Optional[np.ndarray] = None,
+        state: np.ndarray | None = None,
+        vertices: np.ndarray | None = None,
         keep_trail_length: int = 0,
         **kwargs,
     ):
@@ -2188,6 +2266,46 @@ class ObjectBase:
 
         return "G" + "-" + self.role[0] + str(self.id)
 
+    def _get_text(self) -> str:
+        """Return custom text if set, otherwise the default abbreviation."""
+        return self._custom_text if self._custom_text is not None else self.abbr
+
+    def set_text(self, text: str | None) -> None:
+        """
+        Set custom display text for this object.
+
+        The text will be shown on the next render when ``show_text`` is enabled.
+        Pass ``None`` to reset back to the default abbreviation.
+
+        Args:
+            text: The text string to display, or ``None`` to reset.
+        """
+        self._custom_text = text
+        if hasattr(self, "_text"):
+            self._text.set_text(self._get_text())
+
+    def _get_goal_text(self) -> str:
+        """Return custom goal text if set, otherwise the default goal abbreviation."""
+        return (
+            self._custom_goal_text
+            if self._custom_goal_text is not None
+            else self.goal_abbr
+        )
+
+    def set_goal_text(self, text: str | None) -> None:
+        """
+        Set custom display text for this object's goal.
+
+        The text will be shown on the next render when ``show_goal_text`` is enabled.
+        Pass ``None`` to reset back to the default goal abbreviation.
+
+        Args:
+            text: The text string to display, or ``None`` to reset.
+        """
+        self._custom_goal_text = text
+        if hasattr(self, "_goal_text"):
+            self._goal_text.set_text(self._get_goal_text())
+
     @property
     def shape(self) -> str:
         """
@@ -2211,7 +2329,7 @@ class ObjectBase:
         return self.state[2, 0] if self.state_dim >= 6 else 0
 
     @property
-    def kinematics(self) -> Optional[str]:
+    def kinematics(self) -> str | None:
         """
         Get the kinematics name of the object.
 
@@ -2288,7 +2406,7 @@ class ObjectBase:
         return self._velocity
 
     @property
-    def goal(self) -> Optional[np.ndarray]:
+    def goal(self) -> np.ndarray | None:
         """
         Get the goal of the object.
 
@@ -2558,6 +2676,25 @@ class ObjectBase:
         ]
 
     @property
+    def rvo_line_segments(self) -> list[list[float]]:
+        """
+        Get line segments for RVO line obstacle avoidance.
+
+        Returns:
+            list: List of line segments [[x1, y1, x2, y2], ...] for linestring objects,
+                  empty list for other shapes.
+        """
+        if self.shape != "linestring":
+            return []
+        verts = self.vertices  # 2xN array
+        segments = []
+        for i in range(verts.shape[1] - 1):
+            segments.append(
+                [verts[0, i], verts[1, i], verts[0, i + 1], verts[1, i + 1]]
+            )
+        return segments
+
+    @property
     def rvo_state(self):
         """
         Get the full RVO state including desired velocity.
@@ -2585,10 +2722,8 @@ class ObjectBase:
         Returns:
             (2*1) np.ndarray: Velocity [vx, vy].
         """
-        if self.kinematics == "omni":
-            return self.velocity
-        if self.kinematics == "diff" or self.kinematics == "acker":
-            return diff_to_omni(self.state[2, 0], self.velocity)
+        if self.kf is not None:
+            return self.kf.velocity_to_xy(self.state, self.velocity)
         return np.zeros((2, 1))
 
     @property
@@ -2599,15 +2734,8 @@ class ObjectBase:
         Returns:
             float: The maximum speed of the object.
         """
-
-        if self.kinematics == "omni":
-            return np.linalg.norm(self.vel_max)
-        if self.kinematics == "diff" or self.kinematics == "acker":
-            return self.vel_max[0, 0]
-
-        self.logger.warning(
-            f"The kinematics of the object {self.name} is not supported."
-        )
+        if self.kf is not None:
+            return self.kf.compute_max_speed(self.vel_max)
         return 0
 
     @property
@@ -2689,17 +2817,11 @@ class ObjectBase:
         Returns:
             float: The heading of the object.
         """
-
-        if self.kinematics == "omni":
-            heading = atan2(self.velocity[1, 0], self.velocity[0, 0])
-        elif self.kinematics == "diff" or self.kinematics == "acker":
-            heading = self.state[2, 0]
-        else:
-            self.logger.warning(
-                f"The kinematics of the object {self.name} is not supported."
-            )
-
-        return heading
+        if self.kf is not None:
+            return self.kf.compute_heading(self.state, self.velocity)
+        if self.state.shape[0] > 2:
+            return self.state[2, 0]
+        return 0.0
 
     @property
     def orientation(self):

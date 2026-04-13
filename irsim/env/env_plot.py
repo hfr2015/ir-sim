@@ -11,9 +11,9 @@ import os
 import shutil
 from collections.abc import Iterable
 from math import cos, sin
-from typing import Any, Optional
+from typing import Any
 
-import imageio.v3 as imageio
+import imageio
 import matplotlib.pyplot as plt
 import matplotlib.transforms as mtransforms
 import mpl_toolkits.mplot3d.art3d as art3d
@@ -43,7 +43,7 @@ class EnvPlot:
     def __init__(
         self,
         world: Any,
-        objects: Optional[list[Any]] = None,
+        objects: list[Any] | None = None,
         **kwargs: Any,
     ) -> None:
         """
@@ -132,7 +132,7 @@ class EnvPlot:
             self.fig.tight_layout()
 
     def step(
-        self, mode: str = "dynamic", objects: Optional[list[Any]] = None, **kwargs: Any
+        self, mode: str = "dynamic", objects: list[Any] | None = None, **kwargs: Any
     ) -> None:
         """Advance the plot by one step for the given objects.
 
@@ -170,7 +170,7 @@ class EnvPlot:
         self.step_objects_plot("all", objects, **kwargs)
 
     def step_objects_plot(
-        self, mode: str = "dynamic", objects: Optional[list[Any]] = None, **kwargs: Any
+        self, mode: str = "dynamic", objects: list[Any] | None = None, **kwargs: Any
     ) -> None:
         """
         Update the plot for the objects by transform based on the object's original geometry.
@@ -187,7 +187,7 @@ class EnvPlot:
             self.logger.error("Error: Invalid draw mode")
 
     def draw_components(
-        self, mode: str = "all", objects: Optional[list[Any]] = None, **kwargs: Any
+        self, mode: str = "all", objects: list[Any] | None = None, **kwargs: Any
     ) -> None:
         """
         Draw the components in the environment with global axis.
@@ -209,7 +209,7 @@ class EnvPlot:
             self.logger.error("Error: Invalid draw mode")
 
     def clear_components(
-        self, mode: str = "all", objects: Optional[list[Any]] = None
+        self, mode: str = "all", objects: list[Any] | None = None
     ) -> None:
         """
         Clear the components in the environment.
@@ -244,7 +244,7 @@ class EnvPlot:
             self.dyna_point_list = []
             self.dyna_quiver_list = []
 
-    def draw_grid_map(self, grid_map: Optional[Any] = None, **kwargs: Any) -> None:
+    def draw_grid_map(self, grid_map: Any | None = None, **kwargs: Any) -> None:
         """
         Draw the grid map on the plot.
 
@@ -312,7 +312,7 @@ class EnvPlot:
 
     def draw_points(
         self,
-        points: Optional[list[Any] | np.ndarray],
+        points: list[Any] | np.ndarray | None,
         s: int = 10,
         c: str = "m",
         refresh: bool = True,
@@ -342,7 +342,7 @@ class EnvPlot:
 
     def draw_quiver(
         self,
-        point: Optional[np.ndarray],
+        point: np.ndarray | None,
         refresh: bool = False,
         color: str = "black",
         **kwargs: Any,
@@ -460,7 +460,7 @@ class EnvPlot:
         **kwargs: Any,
     ) -> None:
         """
-        Save the animation.
+        Save the animation by streaming frames to avoid loading all images into memory.
 
         Args:
             ani_name (str): Name of the animation. Default is 'animation'.
@@ -468,7 +468,8 @@ class EnvPlot:
             suffix (str): Suffix of the animation file. Default is '.gif'.
             rm_fig_path (bool): Whether to remove the figure path after saving. Default is True.
             kwargs: Additional arguments for saving the animation.
-                See `imageio.imwrite <https://imageio.readthedocs.io/en/stable/_autosummary/imageio.v3.imwrite.html#imageio.v3.imwrite>`_ for details.
+                For GIF: See pillow plugin documentation.
+                For video: See ffmpeg/pyav plugin documentation.
         """
 
         self.saved_ani_kwargs.update(kwargs)
@@ -483,24 +484,57 @@ class EnvPlot:
 
         images = list(glob.glob(fp + "/*.png"))
         images.sort()
-        image_list = [imageio.imread(str(file_name)) for file_name in images]
 
-        if suffix == ".gif":
-            # default arguments for gif
-            durations = [100] * (len(image_list) - 1) + [last_frame_duration * 1000]
-            self.saved_ani_kwargs.update(
-                {"plugin": "pillow", "duration": durations, "loop": 0}
-            )
+        if not images:
+            self.logger.warning("No images found to create animation")
+            return
 
         full_name = ap + "/" + ani_name + suffix
-        imageio.imwrite(full_name, image_list, **self.saved_ani_kwargs)
+        num_images = len(images)
+
+        if suffix == ".gif":
+            # GIF frame timing in milliseconds
+            frame_duration_ms = 100
+
+            # Per-frame durations in milliseconds
+            durations_ms = [frame_duration_ms] * num_images
+
+            # Extend the last frame duration (input argument is seconds)
+            last_frame_duration_ms = int(last_frame_duration * 1000)
+            if num_images > 0 and last_frame_duration_ms > frame_duration_ms:
+                durations_ms[-1] = last_frame_duration_ms
+
+            gif_kwargs = self.saved_ani_kwargs.copy()
+
+            # Convert milliseconds to seconds for imageio writer
+            with imageio.get_writer(
+                full_name,
+                mode="I",
+                loop=0,
+                duration=durations_ms,
+                **gif_kwargs,
+            ) as writer:
+                for image_path in images:
+                    frame = imageio.imread(str(image_path))
+                    writer.append_data(frame)
+
+        else:
+            # Video format (e.g., .mp4) - stream frames to encoder
+            video_kwargs = self.saved_ani_kwargs.copy()
+            fps = video_kwargs.pop("fps", 10)
+
+            # Use get_writer for memory-efficient streaming writes
+            with imageio.get_writer(full_name, fps=fps, **video_kwargs) as writer:
+                for image_path in images:
+                    frame = imageio.imread(str(image_path))
+                    writer.append_data(frame)
 
         self.logger.info(f"{ani_name} created successfully, saved in {ap}")
 
         if rm_fig_path:
             shutil.rmtree(fp)
 
-    def set_ax_viewpoint(self, objects: Optional[list[Any]] = None) -> None:
+    def set_ax_viewpoint(self, objects: list[Any] | None = None) -> None:
         """
         Set the viewpoint of the plot windows by the viewpoint parameter.
 
@@ -626,12 +660,12 @@ def linewidth_from_data_units(
 def draw_patch(
     ax: Any,
     shape: str,
-    state: Optional[np.ndarray] = None,
-    radius: Optional[float] = None,
-    vertices: Optional[np.ndarray] = None,
-    color: Optional[str] = None,
-    zorder: Optional[int] = None,
-    linestyle: Optional[str] = None,
+    state: np.ndarray | None = None,
+    radius: float | None = None,
+    vertices: np.ndarray | None = None,
+    color: str | None = None,
+    zorder: int | None = None,
+    linestyle: str | None = None,
     **kwargs: Any,
 ) -> Any:
     """
@@ -861,7 +895,7 @@ def draw_patch(
 def set_patch_property(
     element: Any,
     ax: Any,
-    state: Optional[np.ndarray] = None,
+    state: np.ndarray | None = None,
     **kwargs: Any,
 ) -> None:
     """

@@ -1,13 +1,14 @@
 from math import cos, pi, sin
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import matplotlib.transforms as mtransforms
 import numpy as np
+import shapely
 from matplotlib.collections import LineCollection
 from mpl_toolkits.mplot3d import Axes3D
 from mpl_toolkits.mplot3d.art3d import Line3DCollection
-from shapely import MultiLineString, Point, is_valid, prepare
-from shapely.ops import unary_union
+from shapely import MultiLineString, prepare
+from shapely.geometry import GeometryCollection
 
 from irsim.util.random import rng
 from irsim.util.util import (
@@ -71,7 +72,7 @@ class Lidar2D:
 
     def __init__(
         self,
-        state: Optional[np.ndarray] = None,
+        state: np.ndarray | None = None,
         obj_id: int = 0,
         range_min: float = 0,
         range_max: float = 10,
@@ -81,7 +82,7 @@ class Lidar2D:
         noise: bool = False,
         std: float = 0.2,
         angle_std: float = 0.02,
-        offset: Optional[list[float]] = None,
+        offset: list[float] | None = None,
         alpha: float = 0.3,
         has_velocity: bool = False,
         **kwargs,
@@ -127,7 +128,7 @@ class Lidar2D:
         self.obj_id = obj_id
 
         # Parent object reference (set by ObjectBase or SensorFactory)
-        self.parent: Optional[ObjectBase] = None
+        self.parent: ObjectBase | None = None
 
         self.plot_patch_list = []
         self.plot_line_list = []
@@ -141,6 +142,35 @@ class Lidar2D:
         from irsim.config import env_param
 
         return env_param
+
+    def _ensure_multi_linestring(self, geometry):
+        """
+        Ensure geometry is a MultiLineString, converting if necessary.
+
+        Args:
+            geometry: Shapely geometry object.
+
+        Returns:
+            MultiLineString: Geometry as MultiLineString.
+        """
+        if geometry.geom_type == "LineString":
+            return MultiLineString([geometry])
+        if geometry.geom_type == "MultiLineString":
+            return geometry
+        if geometry.is_empty:
+            return MultiLineString()
+        if geometry.geom_type == "GeometryCollection":
+            # Extract LineString components (and any lines from nested MultiLineStrings)
+            linestrings = []
+            for g in geometry.geoms:
+                if g.geom_type == "LineString":
+                    linestrings.append(g)
+                elif g.geom_type == "MultiLineString":
+                    linestrings.extend(list(g.geoms))
+            return MultiLineString(linestrings) if linestrings else MultiLineString()
+
+        # For unsupported geometry types (e.g., Point, Polygon), return an empty MultiLineString
+        return MultiLineString()
 
     def init_geometry(self, state):
         """
@@ -186,14 +216,14 @@ class Lidar2D:
         new_geometry, intersect_indices = self.laser_geometry_process(new_geometry)
 
         if len(intersect_indices) == 0:
-            self._geometry = new_geometry
+            self._geometry = self._ensure_multi_linestring(new_geometry)
             self.calculate_range()
         else:
-            origin_point = Point(self.lidar_origin[0, 0], self.lidar_origin[1, 0])
-            filtered_geoms = [
-                g for g in new_geometry.geoms if g.intersects(origin_point)
-            ]
-            self._geometry = MultiLineString(filtered_geoms)
+            origin_pt = shapely.points(self.lidar_origin[0, 0], self.lidar_origin[1, 0])
+            parts = shapely.get_parts(new_geometry)
+            self._geometry = MultiLineString(
+                list(parts[shapely.intersects(parts, origin_pt)])
+            )
             self.calculate_range_vel(intersect_indices)
 
     def laser_geometry_process(self, lidar_geometry):
@@ -224,21 +254,16 @@ class Lidar2D:
             geo = geometries[geom_index]
             obj = objects[geom_index]
 
-            if (
-                obj._id == self.obj_id
-                or not is_valid(obj._geometry)
-                or obj.unobstructed
-            ):
+            if obj._id == self.obj_id or not obj._geometry_valid or obj.unobstructed:
                 continue
 
             if obj.shape == "map":
-                potential_intersections = obj.geometry_tree.query(lidar_geometry)
-                filtered_lines = [obj.linestrings[i] for i in potential_intersections]
-                filtered_multi_lines = MultiLineString(filtered_lines)
-                # prepare(filtered_multi_lines)
-
-                if lidar_geometry.intersects(filtered_multi_lines):
-                    geometries_to_subtract.append(filtered_multi_lines)
+                intersecting_indices = obj.geometry_tree.query(
+                    lidar_geometry, predicate="intersects"
+                )
+                if len(intersecting_indices) > 0:
+                    filtered_lines = [obj.linestrings[i] for i in intersecting_indices]
+                    geometries_to_subtract.extend(filtered_lines)
                     intersect_indices.append(geom_index)
 
             else:
@@ -247,8 +272,13 @@ class Lidar2D:
                     intersect_indices.append(geom_index)
 
         if geometries_to_subtract:
-            merged_geometry = unary_union(geometries_to_subtract)
-            lidar_geometry = lidar_geometry.difference(merged_geometry)
+            obstacle = (
+                geometries_to_subtract[0]
+                if len(geometries_to_subtract) == 1
+                else GeometryCollection(geometries_to_subtract)
+            )
+            lidar_geometry = lidar_geometry.difference(obstacle)
+            lidar_geometry = self._ensure_multi_linestring(lidar_geometry)
 
         return lidar_geometry, intersect_indices
 
@@ -256,12 +286,17 @@ class Lidar2D:
         """
         Calculate the range data from the current geometry.
         """
-        for index, line in enumerate(self._geometry.geoms):
-            # self.range_data[index] = l.length
-            if self.noise:
-                self.range_data[index] = line.length + rng.normal(0, self.std)
-            else:
-                self.range_data[index] = line.length
+        # Reset all beams to the default maximum range to avoid stale values
+        self.range_data[:] = self.range_max
+
+        parts = shapely.get_parts(self._geometry)
+        lengths = shapely.length(parts)
+        if self.noise:
+            self.range_data[: len(lengths)] = lengths + rng.normal(
+                0, self.std, len(lengths)
+            )
+        else:
+            self.range_data[: len(lengths)] = lengths
 
     def calculate_range_vel(self, intersect_index):
         """
@@ -270,18 +305,25 @@ class Lidar2D:
         Args:
             intersect_index (list): List of intersected object indices.
         """
-        for index, line in enumerate(self._geometry.geoms):
-            # self.range_data[index] = l.length
-            self.range_data[index] = (
-                line.length + rng.normal(0, self.std) if self.noise else line.length
+        parts = shapely.get_parts(self._geometry)
+        lengths = shapely.length(parts)
+        if self.noise:
+            self.range_data[: len(lengths)] = lengths + rng.normal(
+                0, self.std, len(lengths)
             )
+        else:
+            self.range_data[: len(lengths)] = lengths
 
-            if self.has_velocity and line.length < self.range_max - 0.02:
-                for index_obj in intersect_index:
-                    obj = self._env_param.objects[index_obj]
-                    if obj.geometry.distance(line) < 0.1:
-                        self.velocity[:, index : index + 1] = obj.velocity_xy
-                        break
+        if self.has_velocity:
+            # Reset all beam velocities to avoid carrying over stale values
+            self.velocity[:] = 0.0
+            for index, (line, length) in enumerate(zip(parts, lengths, strict=True)):
+                if length < self.range_max - 0.02:
+                    for index_obj in intersect_index:
+                        obj = self._env_param.objects[index_obj]
+                        if obj.geometry.distance(line) < 0.1:
+                            self.velocity[:, index : index + 1] = obj.velocity_xy
+                            break
 
     def get_scan(self):
         """
@@ -322,7 +364,7 @@ class Lidar2D:
         """
         return np.squeeze(self.offset).tolist()
 
-    def plot(self, ax, state: Optional[np.ndarray] = None, **kwargs):
+    def plot(self, ax, state: np.ndarray | None = None, **kwargs):
         """
         Plot the Lidar's detected lines on a given axis.
         """

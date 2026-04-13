@@ -5,20 +5,20 @@ reference: Lynch, Kevin M., and Frank C. Park. Modern Robotics: Mechanics, Plann
 """
 
 from math import cos, sin, tan
-from typing import Optional
 
 import numpy as np
 
 from irsim.util.random import rng
-from irsim.util.util import WrapToPi
+from irsim.util.util import WrapToPi, validate_shape
 
 
+@validate_shape(state=3, velocity=2)
 def differential_kinematics(
     state: np.ndarray,
     velocity: np.ndarray,
     step_time: float,
     noise: bool = False,
-    alpha: Optional[list[float]] = None,
+    alpha: list[float] | None = None,
 ) -> np.ndarray:
     """
     Calculate the next state for a differential wheel robot.
@@ -36,12 +36,9 @@ def differential_kinematics(
     if alpha is None:
         alpha = [0.03, 0, 0, 0.03]
 
-    assert state.shape[0] >= 3
-    assert velocity.shape[0] >= 2
-
-    # Add noise to the velocity if required
     if noise:
-        assert len(alpha) >= 4
+        if len(alpha) < 4:
+            raise ValueError("Parameter 'alpha' must have length >= 4 when noise=True")
         std_linear = np.sqrt(
             alpha[0] * (velocity[0, 0] ** 2) + alpha[1] * (velocity[1, 0] ** 2)
         )
@@ -84,12 +81,13 @@ def differential_kinematics(
     return next_state
 
 
+@validate_shape(state=4, velocity=2)
 def ackermann_kinematics(
     state: np.ndarray,
     velocity: np.ndarray,
     step_time: float,
     noise: bool = False,
-    alpha: Optional[list[float]] = None,
+    alpha: list[float] | None = None,
     mode: str = "steer",
     wheelbase: float = 1,
 ) -> np.ndarray:
@@ -114,14 +112,12 @@ def ackermann_kinematics(
     if alpha is None:
         alpha = [0.03, 0, 0, 0.03]
 
-    assert state.shape[0] >= 4
-    assert velocity.shape[0] >= 2
-
     phi = state[2, 0]
     psi = state[3, 0]
 
     if noise:
-        assert len(alpha) >= 4
+        if len(alpha) < 4:
+            raise ValueError("Parameter 'alpha' must have length >= 4 when noise=True")
         std_linear = np.sqrt(
             alpha[0] * (velocity[0, 0] ** 2) + alpha[1] * (velocity[1, 0] ** 2)
         )
@@ -150,12 +146,13 @@ def ackermann_kinematics(
     return new_state
 
 
+@validate_shape(state=2, velocity=2)
 def omni_kinematics(
     state: np.ndarray,
     velocity: np.ndarray,
     step_time: float,
     noise: bool = False,
-    alpha: Optional[list[float]] = None,
+    alpha: list[float] | None = None,
 ) -> np.ndarray:
     """
     Calculate the next position for an omnidirectional robot.
@@ -173,11 +170,9 @@ def omni_kinematics(
     if alpha is None:
         alpha = [0.03, 0, 0, 0.03]
 
-    assert velocity.shape[0] >= 2
-    assert state.shape[0] >= 2
-
     if noise:
-        assert len(alpha) >= 2
+        if len(alpha) < 2:
+            raise ValueError("Parameter 'alpha' must have length >= 2 when noise=True")
         std_vx = np.sqrt(alpha[0])
         std_vy = np.sqrt(alpha[-1])
         real_velocity = velocity + rng.normal([[0], [0]], scale=[[std_vx], [std_vy]])
