@@ -2632,7 +2632,7 @@ class ObjectBase:
 
         if dis > goal_threshold:
             vx = self.vel_max[0, 0] * cos(radian)
-            vy = self.vel_max[1, 0] * sin(radian)
+            vy = self.vel_max[0, 0] * sin(radian)
         else:
             vx = 0
             vy = 0
@@ -2835,4 +2835,19 @@ class ObjectBase:
     
     @property
     def omni_state(self):
-        return self.rvo_state
+        """
+        Get the full RVO state including desired velocity.
+
+        Returns: rvo don't need theta, so this is the same as rvo_state but without theta.
+            list: State [x, y, vx, vy, radius, vx_des, vy_des].
+        """
+        vx_des, vy_des = self.desired_omni_vel[:, 0]
+        return [
+            self.state[0, 0],
+            self.state[1, 0],
+            self.velocity_xy[0, 0],
+            self.velocity_xy[1, 0],
+            self.radius_extend,
+            vx_des,
+            vy_des
+        ]
