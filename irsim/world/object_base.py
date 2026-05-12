@@ -2305,6 +2305,25 @@ class ObjectBase:
         self._custom_goal_text = text
         if hasattr(self, "_goal_text"):
             self._goal_text.set_text(self._get_goal_text())
+    
+    def set_obj_color(self, color: str) -> None:
+        """
+        Set the color of the object.
+
+        Args:
+            color: The color string to set for the object.
+        """
+        self.color = color
+        # for patch in self.plot_patch_list:
+        #     patch.set_color(color)
+        # for line in self.plot_line_list:
+        #     line[0].set_color(color)
+        # if hasattr(self, "_text"):
+        #     self._text.set_color(color)
+        # if hasattr(self, "_goal_text"):
+        #     self._goal_text.set_color(color)
+        # if hasattr(self, "goal_abbr_text"):
+        #     self.goal_abbr_text.set_color(color)
 
     @property
     def shape(self) -> str:
