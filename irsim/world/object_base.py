@@ -2653,8 +2653,8 @@ class ObjectBase:
             vx = self.vel_max[0, 0] * cos(radian)
             vy = self.vel_max[0, 0] * sin(radian)
         else:
-            vx = 0
-            vy = 0
+            vx = 0.0
+            vy = 0.0
 
         return np.array([[vx], [vy]])
 

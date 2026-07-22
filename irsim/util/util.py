@@ -402,8 +402,8 @@ def omni_to_diff(
 
     speed = np.sqrt(vel_omni[0, 0] ** 2 + vel_omni[1, 0] ** 2)
     
-    if speed > 1.5: # 后加的，为了和rl 保持一致，这里的阈值是手动设置的
-        speed = 1.5
+    # if speed > 1.5: # 后加的，为了和rl 保持一致，这里的阈值是手动设置的
+    #     speed = 1.5
 
     # TODO： 这里可能不对吧，因为可能是纯旋转啊
     if speed <= mini_speed:
